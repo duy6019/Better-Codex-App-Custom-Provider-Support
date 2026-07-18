@@ -15,6 +15,9 @@ This project currently supports **macOS only**.
 > [!CAUTION]
 > Changing the provider in a running conversation/thread does **not** work. The conversation/thread continues using the provider it started with.
 
+<img width="500" src="https://github.com/user-attachments/assets/9b61e720-35e9-4021-9c6f-bd77e334e471" />
+<br>
+
 ## Requirements
 
 - macOS
