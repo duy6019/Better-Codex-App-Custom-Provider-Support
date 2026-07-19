@@ -210,9 +210,7 @@ CENTRAL_DIFF = r"""@@ -4631,6 +4631,146 @@
 +    return e.modelProviders == null ? { ...e, modelProviders: [] } : e;
 +  }
 +  if (e === `thread/start` && t != null && typeof t === `object`)
-+    return t.modelProvider == null
-+      ? { ...t, modelProvider: await codexProviderForThreadStart(t) }
-+      : t;
++    return { ...t, modelProvider: await codexProviderForThreadStart(t) };
 +  return t;
  }
  var jf,

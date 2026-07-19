@@ -180,6 +180,14 @@ class PatcherTemplateTests(unittest.TestCase):
         self.assertNotIn("\n++", patcher.CENTRAL_DIFF)
         self.assertNotIn("\n++", patcher.PICKER_DIFF)
 
+    def test_thread_start_recomputes_provider_from_picker_selection(self):
+        expected = (
+            "if (e === `thread/start` && t != null && typeof t === `object`)\n"
+            "+    return { ...t, modelProvider: await codexProviderForThreadStart(t) };"
+        )
+
+        self.assertIn(expected, patcher.CENTRAL_DIFF)
+
 
 if __name__ == "__main__":
     unittest.main()
