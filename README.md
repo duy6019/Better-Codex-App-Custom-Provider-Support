@@ -24,6 +24,7 @@ This project currently supports **macOS only**.
 - ChatGPT installed at `/Applications/ChatGPT.app`
 - Python 3.9 or newer
 - Node.js with `npx`
+- Codex CLI available as `codex`
 
 ## Install
 
@@ -37,82 +38,54 @@ This project currently supports **macOS only**.
 <br>
 <br>
 
-1. Click on the `patch_chatgpt_providers.py` file in the repository.
-2. Open the menu in the top-right.
-3. Click on **Download**.
-4. Run the downloaded script:
+1. Download both `patch_chatgpt_providers.py` and `sync_codex_models.py` from the repository.
+2. Run the patch script:
 
 ```bash
 python3 patch_chatgpt_providers.py
+```
+
+3. Run the model sync script from the same directory:
+
+```bash
+python3 sync_codex_models.py
 ```
 
 The installer closes processes belonging to the target app, creates a complete backup, patches `app.asar`, updates Electron's ASAR integrity metadata, and applies an ad-hoc signature.
 
 Run `python3 patch_chatgpt_providers.py --help` to see alternate app, config, and backup paths.
 
-## Configure a custom provider
+## Sync Codex models and 9router
 
-Custom Codex providers belong in `~/.codex/config.toml`. Provider IDs such as `openrouter` are referenced by the patch configuration later.
-
-Example OpenRouter provider:
-
-```toml
-[model_providers.openrouter]
-name = "OpenRouter"
-base_url = "https://openrouter.ai/api/v1"
-wire_api = "responses"
-
-[model_providers.openrouter.auth]
-command = "/usr/bin/security"
-args = ["find-generic-password", "-a", "YOUR_MACOS_USERNAME", "-s", "Codex OpenRouter API Key", "-w"]
-timeout_ms = 5000
-refresh_interval_ms = 0
-```
-
-Replace `YOUR_MACOS_USERNAME`, then add or update the API key in macOS Keychain. The command prompts for the key instead of placing it in shell history:
+Run the sync script after patching, and again whenever the bundled Codex model catalog changes:
 
 ```bash
-security add-generic-password -U -a "$USER" -s "Codex OpenRouter API Key" -w
+python3 sync_codex_models.py
 ```
 
-Codex also supports environment-variable authentication with `env_key`. Do not combine `env_key` with a `[model_providers.<id>.auth]` section. For all authentication methods and provider options, see the [Codex custom model provider documentation](https://learn.chatgpt.com/docs/config-file/config-advanced#custom-model-providers).
+The script asks for a 9router base URL. Press Enter to use the local default:
 
-Do not set a global `model_provider` if OpenAI and custom providers should coexist in the desktop app. The patch selects the provider when each new task starts.
+```text
+http://127.0.0.1:20128/v1
+```
 
-## Add custom models to Codex
+For an unattended run or another endpoint, pass the URL explicitly:
 
-Codex loads custom model metadata from the file configured by `model_catalog_json`.
+```bash
+python3 sync_codex_models.py --9router-base-url https://router.example/v1
+```
 
-1. Export the bundled catalog as a starting point:
+Each run reads `codex debug models --bundled` and recreates all three files:
 
-   ```bash
-   mkdir -p ~/.codex/model-catalogs
-   codex debug models --bundled > ~/.codex/model-catalogs/custom.json
-   ```
+- `~/.codex/model-catalogs/custom.json`: every bundled Codex model plus a `cx/<slug>` clone labeled ` (9router)`.
+- `~/.codex/desktop-model-providers.json`: OpenAI for original slugs and 9router for every `cx/` clone.
+- `~/.codex/config.toml`: the root `model_catalog_json` entry and `[model_providers.9router]` table.
 
-2. Add model objects to the top-level `models` array. Copy an existing entry with similar capabilities, then update its model ID, display name, context window, modalities, reasoning levels, and tool support.
+The script preserves all other TOML settings, including project configuration and an existing `[model_providers.9router.auth]` table. It does not change your global `model = ...` choice. It recreates the catalog and provider-routing JSON on every run, so do not hand-edit those generated files.
 
-   The model ID is the `slug` value. It must match the model ID expected by the provider, for example:
+Use `--catalog`, `--provider-config`, and `--config` to target alternate paths, or `--codex-bin` when the Codex CLI has a different executable name. Run `python3 sync_codex_models.py --help` for details.
 
-   ```json
-   {
-     "slug": "moonshotai/kimi-k3",
-     "display_name": "Kimi K3 (OpenRouter)",
-     "description": "MoonshotAI Kimi K3 through OpenRouter."
-   }
-   ```
-
-   Keep the remaining required fields from the copied entry and adjust them to the model's real capabilities. Do not advertise unsupported tools, modalities, or context-window sizes.
-
-3. Point Codex at the catalog in `~/.codex/config.toml`:
-
-   ```toml
-   model_catalog_json = "/Users/your-name/.codex/model-catalogs/custom.json"
-   ```
-
-4. Restart the app after changing `model_catalog_json` or the model catalog.
-
-Use `codex debug models` to inspect the effective catalog Codex sees.
+Restart ChatGPT/Codex after synchronization so it loads the new model catalog. Do not set a global `model_provider` if OpenAI and 9router should coexist in the desktop app; the patch selects a provider when each new task starts.
 
 ## Configure the patched provider menu
 
@@ -122,7 +95,7 @@ The installer creates:
 ~/.codex/desktop-model-providers.json
 ```
 
-Example:
+The sync script creates this file. A shortened example:
 
 ```json
 {
@@ -135,26 +108,25 @@ Example:
       "description": "Uses your signed-in ChatGPT account"
     },
     {
-      "id": "openrouter",
-      "label": "OpenRouter",
-      "description": "Uses [model_providers.openrouter] from config.toml"
+      "id": "9router",
+      "label": "9router",
+      "description": "Uses [model_providers.9router] from config.toml"
     }
   ],
   "model_providers": {
-    "moonshotai/kimi-k3": "openrouter",
-    "x-ai/grok-4.5": "openrouter",
-    "anthropic/claude-fable-5": "openrouter"
+    "cx/gpt-5.6-sol": "9router",
+    "cx/gpt-5.6-terra": "9router"
   }
 }
 ```
 
 - `providers` defines the providers displayed in the app menu.
-- `model_providers` maps exact model slugs to provider IDs for Automatic mode.
+- `model_providers` maps exact clone slugs to 9router for Automatic mode.
 - `default_provider` handles models without an explicit mapping.
 - Every custom provider ID must match a `[model_providers.<id>]` section in `config.toml`.
 - API keys do not belong in this JSON file.
 
-The app reloads this file when the provider menu opens and before a new task starts. Repatching is not required after editing it.
+The app reloads this file when the provider menu opens and before a new task starts. Repatching is not required after running the sync script.
 
 ## Updates and recovery
 

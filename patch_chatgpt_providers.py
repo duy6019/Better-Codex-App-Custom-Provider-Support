@@ -45,17 +45,22 @@ DEFAULT_PROVIDER_CONFIG: dict[str, Any] = {
             ),
         },
         {
-            "id": "openrouter",
-            "label": "OpenRouter",
+            "id": "9router",
+            "label": "9router",
             "description": (
-                "Custom provider; uses [model_providers.openrouter] from config.toml"
+                "Custom provider; uses [model_providers.9router] from config.toml"
             ),
         },
     ],
     "model_providers": {
-        "moonshotai/kimi-k3": "openrouter",
-        "x-ai/grok-4.5": "openrouter",
-        "anthropic/claude-fable-5": "openrouter",
+        "cx/gpt-5.6-sol": "9router",
+        "cx/gpt-5.6-terra": "9router",
+        "cx/gpt-5.6-luna": "9router",
+        "cx/gpt-5.5": "9router",
+        "cx/gpt-5.4": "9router",
+        "cx/gpt-5.4-mini": "9router",
+        "cx/gpt-5.2": "9router",
+        "cx/codex-auto-review": "9router",
     },
 }
 
@@ -76,15 +81,20 @@ CENTRAL_DIFF = r"""@@ -4631,6 +4631,146 @@
 +        description: `Uses your signed-in ChatGPT account`,
 +      },
 +      {
-+        id: `openrouter`,
-+        label: `OpenRouter`,
-+        description: `Uses the OpenRouter provider from config.toml`,
++        id: `9router`,
++        label: `9router`,
++        description: `Uses the 9router provider from config.toml`,
 +      },
 +    ],
 +    modelProviders: {
-+      "moonshotai/kimi-k3": `openrouter`,
-+      "x-ai/grok-4.5": `openrouter`,
-+      "anthropic/claude-fable-5": `openrouter`,
++      "cx/gpt-5.6-sol": `9router`,
++      "cx/gpt-5.6-terra": `9router`,
++      "cx/gpt-5.6-luna": `9router`,
++      "cx/gpt-5.5": `9router`,
++      "cx/gpt-5.4": `9router`,
++      "cx/gpt-5.4-mini": `9router`,
++      "cx/gpt-5.2": `9router`,
++      "cx/codex-auto-review": `9router`,
 +    },
 +  };
 +}
@@ -241,15 +251,20 @@ PICKER_DIFF = r"""@@ -10162,6 +10162,204 @@
 +        description: `Uses your signed-in ChatGPT account`,
 +      },
 +      {
-+        id: `openrouter`,
-+        label: `OpenRouter`,
-+        description: `Uses the OpenRouter provider from config.toml`,
++        id: `9router`,
++        label: `9router`,
++        description: `Uses the 9router provider from config.toml`,
 +      },
 +    ],
 +    modelProviders: {
-+      "moonshotai/kimi-k3": `openrouter`,
-+      "x-ai/grok-4.5": `openrouter`,
-+      "anthropic/claude-fable-5": `openrouter`,
++      "cx/gpt-5.6-sol": `9router`,
++      "cx/gpt-5.6-terra": `9router`,
++      "cx/gpt-5.6-luna": `9router`,
++      "cx/gpt-5.5": `9router`,
++      "cx/gpt-5.4": `9router`,
++      "cx/gpt-5.4-mini": `9router`,
++      "cx/gpt-5.2": `9router`,
++      "cx/codex-auto-review": `9router`,
 +    },
 +  };
 +}
