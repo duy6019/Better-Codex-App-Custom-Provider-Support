@@ -1406,14 +1406,18 @@ def main() -> int:
         app = args.app.expanduser().resolve()
         config = args.config.expanduser().resolve()
         backup = effective_codex_home().resolve() / "ChatGPT-original.app"
+        legacy_backup = config.parent / "ChatGPT-original.app"
+        migrated_backup: Path | None = None
         stop_target_app_processes(app, args.allow_running)
         app_asar = app / "Contents" / "Resources" / "app.asar"
         if app_asar.is_file() and contains_marker(app_asar):
-            reapply_source = (
-                args.reapply_from.expanduser().resolve()
-                if args.reapply_from is not None
-                else backup
-            )
+            if args.reapply_from is not None:
+                reapply_source = args.reapply_from.expanduser().resolve()
+            elif not backup.exists() and legacy_backup != backup and legacy_backup.exists():
+                reapply_source = legacy_backup
+                migrated_backup = legacy_backup
+            else:
+                reapply_source = backup
             original = validate_reapply_source(app, reapply_source)
             archived_patch = restore_backup(app, original)
             terminal_status(
@@ -1428,6 +1432,23 @@ def main() -> int:
             backup,
             args.overwrite_config,
         )
+        if migrated_backup is not None:
+            try:
+                shutil.rmtree(migrated_backup)
+                terminal_status(
+                    "MIGRATED",
+                    "Legacy original backup moved to the managed backup location.",
+                    "32",
+                    detail=backup,
+                )
+            except OSError as exc:
+                terminal_status(
+                    "MIGRATE",
+                    f"Could not remove the legacy backup: {exc}",
+                    "33",
+                    detail=migrated_backup,
+                    stream=sys.stderr,
+                )
     except PatchError as exc:
         fail(str(exc))
     except PermissionError as exc:

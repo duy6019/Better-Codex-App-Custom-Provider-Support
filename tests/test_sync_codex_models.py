@@ -294,6 +294,43 @@ class ManagedBackupTests(unittest.TestCase):
                 resolved_app, resolved_config, resolved_backup, False
             )
 
+    def test_main_migrates_legacy_custom_config_backup_after_reapplying(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = root / "ChatGPT.app"
+            config = root / "custom" / "desktop-model-providers.json"
+            legacy_backup = config.parent / "ChatGPT-original.app"
+            managed_home = root / ".codex"
+            app_asar = app / "Contents" / "Resources" / "app.asar"
+            app_asar.parent.mkdir(parents=True)
+            app_asar.write_bytes(b"patched")
+            legacy_backup.mkdir(parents=True)
+            args = mock.Mock(
+                app=app,
+                config=config,
+                reapply_from=None,
+                overwrite_config=False,
+                allow_running=False,
+            )
+
+            with (
+                mock.patch.object(patcher, "parse_args", return_value=args),
+                mock.patch.dict(
+                    patcher.os.environ, {"CODEX_HOME": str(managed_home)}
+                ),
+                mock.patch.object(patcher, "stop_target_app_processes"),
+                mock.patch.object(patcher, "contains_marker", return_value=True),
+                mock.patch.object(
+                    patcher, "validate_reapply_source", return_value=legacy_backup
+                ) as validate,
+                mock.patch.object(patcher, "restore_backup"),
+                mock.patch.object(patcher, "patch_app"),
+            ):
+                self.assertEqual(patcher.main(), 0)
+
+            self.assertEqual(validate.call_args.args[1], legacy_backup.resolve())
+            self.assertFalse(legacy_backup.exists())
+
     def test_restore_backup_preserves_the_app_when_restore_copy_is_incomplete(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
