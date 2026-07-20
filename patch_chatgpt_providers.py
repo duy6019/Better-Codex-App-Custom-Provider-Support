@@ -1440,15 +1440,23 @@ def main() -> int:
         config = args.config.expanduser().resolve()
         backup = effective_codex_home().resolve() / "ChatGPT-original.app"
         legacy_backup = config.parent / "ChatGPT-original.app"
-        migrated_backup: Path | None = None
+        migrated_backup = (
+            legacy_backup
+            if (
+                args.reapply_from is None
+                and not backup.exists()
+                and legacy_backup != backup
+                and legacy_backup.exists()
+            )
+            else None
+        )
         stop_target_app_processes(app, args.allow_running)
         app_asar = app / "Contents" / "Resources" / "app.asar"
         if app_asar.is_file() and contains_marker(app_asar):
             if args.reapply_from is not None:
                 reapply_source = args.reapply_from.expanduser().resolve()
-            elif not backup.exists() and legacy_backup != backup and legacy_backup.exists():
-                reapply_source = legacy_backup
-                migrated_backup = legacy_backup
+            elif migrated_backup is not None:
+                reapply_source = migrated_backup
             else:
                 reapply_source = backup
             original = validate_reapply_source(app, reapply_source)

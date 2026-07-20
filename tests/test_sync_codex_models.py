@@ -341,6 +341,44 @@ class ManagedBackupTests(unittest.TestCase):
                 legacy_backup=legacy_backup.resolve(),
             )
 
+    def test_main_consolidates_legacy_backup_for_an_unpatched_app_update(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = root / "ChatGPT.app"
+            config = root / "custom" / "desktop-model-providers.json"
+            legacy_backup = config.parent / "ChatGPT-original.app"
+            managed_home = root / ".codex"
+            app_asar = app / "Contents" / "Resources" / "app.asar"
+            app_asar.parent.mkdir(parents=True)
+            app_asar.write_bytes(b"original-update")
+            legacy_backup.mkdir(parents=True)
+            args = mock.Mock(
+                app=app,
+                config=config,
+                reapply_from=None,
+                overwrite_config=False,
+                allow_running=False,
+            )
+
+            with (
+                mock.patch.object(patcher, "parse_args", return_value=args),
+                mock.patch.dict(
+                    patcher.os.environ, {"CODEX_HOME": str(managed_home)}
+                ),
+                mock.patch.object(patcher, "stop_target_app_processes"),
+                mock.patch.object(patcher, "contains_marker", return_value=False),
+                mock.patch.object(patcher, "patch_app") as patch_app,
+            ):
+                self.assertEqual(patcher.main(), 0)
+
+            patch_app.assert_called_once_with(
+                app.resolve(),
+                config.resolve(),
+                managed_home.resolve() / "ChatGPT-original.app",
+                False,
+                legacy_backup=legacy_backup.resolve(),
+            )
+
     def test_consolidate_legacy_backup_keeps_only_the_canonical_copy(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

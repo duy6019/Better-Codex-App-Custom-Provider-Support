@@ -59,7 +59,7 @@ make_backup(app, managed_backup)
 
 Remove `--backup-dir`. After copying, verify that the backup ASAR header hash equals the source ASAR header hash before any app file is replaced; replace an older managed backup only after the new copy verifies. Restore that backup automatically before processing an already patched app.
 
-When the canonical backup is absent, accept a validated legacy backup at the custom `--config` parent for one migration reapply, then remove it immediately after the new canonical backup has been created and verified, before app mutation. If the legacy cleanup fails, remove the new canonical backup and stop.
+When the canonical backup is absent, recognize a legacy backup at the custom `--config` parent for both patched reapply and unpatched-update flows. For a patched app, validate it before restoring. Remove it immediately after the new canonical backup has been created and verified, before app mutation. If the legacy cleanup fails, remove the new canonical backup and stop.
 
 - [x] **Step 4: Run test to verify it passes**
 
