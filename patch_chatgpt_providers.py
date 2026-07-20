@@ -737,14 +737,15 @@ def invoking_user_home() -> Path:
     return Path.home()
 
 
-def parse_args() -> argparse.Namespace:
-    home = invoking_user_home()
+def effective_codex_home() -> Path:
     configured_codex_home = os.environ.get("CODEX_HOME")
-    codex_home = (
-        Path(configured_codex_home).expanduser()
-        if configured_codex_home
-        else home / ".codex"
-    )
+    if configured_codex_home:
+        return Path(configured_codex_home).expanduser()
+    return invoking_user_home() / ".codex"
+
+
+def parse_args() -> argparse.Namespace:
+    codex_home = effective_codex_home()
     parser = FancyArgumentParser(
         description="Add an explicit provider selector to the macOS ChatGPT/Codex desktop app."
     )
@@ -1193,6 +1194,10 @@ def validate_reapply_source(app: Path, backup: Path) -> Path:
 
     app_info, _ = load_plist(app_info_path)
     backup_info, _ = load_plist(backup_info_path)
+    if asar_header_hash(app_asar_path) != asar_integrity_hash(app_info):
+        raise PatchError("The target app's ASAR integrity verification failed")
+    if asar_header_hash(backup_asar_path) != asar_integrity_hash(backup_info):
+        raise PatchError("The original backup ASAR integrity verification failed")
     app_version = (
         str(app_info.get("CFBundleShortVersionString", "unknown")),
         str(app_info.get("CFBundleVersion", "unknown")),
@@ -1400,7 +1405,7 @@ def main() -> int:
     try:
         app = args.app.expanduser().resolve()
         config = args.config.expanduser().resolve()
-        backup = config.parent / "ChatGPT-original.app"
+        backup = effective_codex_home().resolve() / "ChatGPT-original.app"
         stop_target_app_processes(app, args.allow_running)
         app_asar = app / "Contents" / "Resources" / "app.asar"
         if app_asar.is_file() and contains_marker(app_asar):

@@ -4,7 +4,7 @@
 
 **Goal:** Keep one verified original backup for automatic repeat patching and stop writing timestamped backups to `~/Applications/ChatGPT Patch Backups`.
 
-**Architecture:** `patch_app` owns the managed original backup at `~/.codex/ChatGPT-original.app`. `make_backup` atomically replaces that single copy after validating its ASAR header hash against the source. `main` restores it automatically if the target app is already patched, then runs the normal installation flow.
+**Architecture:** `patch_app` uses the managed original backup at `~/.codex/ChatGPT-original.app` (or the effective `CODEX_HOME`), independently of `--config`. `make_backup` atomically replaces that single copy after validating its ASAR header hash against the source. `main` validates and restores it automatically if the target app is already patched, then runs the normal installation flow.
 
 **Tech Stack:** Python standard library, `unittest`, macOS `ditto`.
 
@@ -51,7 +51,7 @@ Expected: FAIL because the CLI still exposes `--backup-dir`.
 - [x] **Step 3: Write minimal implementation**
 
 ```python
-managed_backup = config.parent / "ChatGPT-original.app"
+managed_backup = effective_codex_home() / "ChatGPT-original.app"
 if contains_marker(app_asar):
     restore_backup(app, validate_reapply_source(app, managed_backup))
 make_backup(app, managed_backup)

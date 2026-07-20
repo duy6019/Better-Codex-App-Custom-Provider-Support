@@ -257,14 +257,14 @@ class ManagedBackupTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             app = root / "ChatGPT.app"
-            config = root / ".codex" / "desktop-model-providers.json"
-            backup = config.parent / "ChatGPT-original.app"
+            config = root / "custom" / "desktop-model-providers.json"
+            managed_home = root / ".codex"
             app_asar = app / "Contents" / "Resources" / "app.asar"
             app_asar.parent.mkdir(parents=True)
             app_asar.write_bytes(b"patched")
             resolved_app = app.resolve()
             resolved_config = config.resolve()
-            resolved_backup = resolved_config.parent / "ChatGPT-original.app"
+            resolved_backup = managed_home.resolve() / "ChatGPT-original.app"
             args = mock.Mock(
                 app=app,
                 config=config,
@@ -275,6 +275,9 @@ class ManagedBackupTests(unittest.TestCase):
 
             with (
                 mock.patch.object(patcher, "parse_args", return_value=args),
+                mock.patch.dict(
+                    patcher.os.environ, {"CODEX_HOME": str(managed_home)}
+                ),
                 mock.patch.object(patcher, "stop_target_app_processes"),
                 mock.patch.object(patcher, "contains_marker", return_value=True),
                 mock.patch.object(
@@ -341,8 +344,51 @@ class ReapplyTests(unittest.TestCase):
                 patcher,
                 "contains_marker",
                 side_effect=lambda path: path == app / "Contents" / "Resources" / "app.asar",
+            ), mock.patch.object(patcher, "asar_header_hash", return_value="hash"), mock.patch.object(
+                patcher, "asar_integrity_hash", return_value="hash"
             ):
                 self.assertEqual(patcher.validate_reapply_source(app, backup), backup)
+
+    def test_reapply_source_rejects_corrupt_original_backup(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = root / "ChatGPT.app"
+            backup = root / "ChatGPT-original.app"
+            for bundle in (app, backup):
+                resources = bundle / "Contents" / "Resources"
+                resources.mkdir(parents=True)
+                (resources / "app.asar").write_bytes(b"asar")
+                with (bundle / "Contents" / "Info.plist").open("wb") as handle:
+                    plistlib.dump(
+                        {
+                            "CFBundleShortVersionString": "26.715.31925",
+                            "CFBundleVersion": "5551",
+                            "ElectronAsarIntegrity": {
+                                "Resources/app.asar": {"hash": "expected"}
+                            },
+                        },
+                        handle,
+                    )
+
+            with (
+                mock.patch.object(
+                    patcher,
+                    "contains_marker",
+                    side_effect=lambda path: path
+                    == app / "Contents" / "Resources" / "app.asar",
+                ),
+                mock.patch.object(
+                    patcher,
+                    "asar_header_hash",
+                    side_effect=lambda path: (
+                        "expected"
+                        if path == app / "Contents" / "Resources" / "app.asar"
+                        else "corrupted"
+                    ),
+                ),
+            ):
+                with self.assertRaisesRegex(patcher.PatchError, "backup ASAR"):
+                    patcher.validate_reapply_source(app, backup)
 
     def test_reapply_source_rejects_backup_from_another_app_build(self):
         self.assertTrue(hasattr(patcher, "validate_reapply_source"))
@@ -368,6 +414,8 @@ class ReapplyTests(unittest.TestCase):
                 patcher,
                 "contains_marker",
                 side_effect=lambda path: path == app / "Contents" / "Resources" / "app.asar",
+            ), mock.patch.object(patcher, "asar_header_hash", return_value="hash"), mock.patch.object(
+                patcher, "asar_integrity_hash", return_value="hash"
             ):
                 with self.assertRaisesRegex(patcher.PatchError, "does not match"):
                     patcher.validate_reapply_source(app, backup)
