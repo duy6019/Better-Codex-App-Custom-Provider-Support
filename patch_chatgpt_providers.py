@@ -194,23 +194,26 @@ CENTRAL_DIFF = r"""@@ -4631,6 +4631,146 @@
 +function codexCustomProviderChoice(e) {
 +  try {
 +    let t = window.localStorage.getItem(`codex.customProviderSelection.v1`);
-+    return t === `auto` || e.providers.some((e) => e.id === t) ? t : `auto`;
++    return e.providers.some((e) => e.id === t) ? t : e.defaultProvider;
 +  } catch {
-+    return `auto`;
++    return e.defaultProvider;
 +  }
 +}
-+async function codexProviderForThreadStart(e) {
-+  let t = await codexLoadProviderRoutingConfig(!0),
-+    n = codexCustomProviderChoice(t);
-+  return n === `auto` ? (t.modelProviders[e?.model] ?? t.defaultProvider) : n;
++async function codexSelectedProvider() {
++  let e = await codexLoadProviderRoutingConfig(!0);
++  return codexCustomProviderChoice(e);
 +}
 +async function codexPatchAppServerParams(e, t) {
 +  if (e === `thread/list`) {
 +    let e = t != null && typeof t === `object` ? t : {};
 +    return e.modelProviders == null ? { ...e, modelProviders: [] } : e;
 +  }
-+  if (e === `thread/start` && t != null && typeof t === `object`)
-+    return { ...t, modelProvider: await codexProviderForThreadStart(t) };
++  if (
++    (e === `thread/start` || e === `thread/fork`) &&
++    t != null &&
++    typeof t === `object`
++  )
++    return { ...t, modelProvider: await codexSelectedProvider() };
 +  return t;
  }
  var jf,
@@ -357,9 +360,9 @@ PICKER_DIFF = r"""@@ -10162,6 +10162,204 @@
 +function codexReadCustomProviderChoice(e) {
 +  try {
 +    let t = window.localStorage.getItem(`codex.customProviderSelection.v1`);
-+    return t === `auto` || e.providers.some((e) => e.id === t) ? t : `auto`;
++    return e.providers.some((e) => e.id === t) ? t : e.defaultProvider;
 +  } catch {
-+    return `auto`;
++    return e.defaultProvider;
 +  }
 +}
 +function codexWriteCustomProviderChoice(e) {
@@ -378,12 +381,13 @@ PICKER_DIFF = r"""@@ -10162,6 +10162,204 @@
 +    let e = !0;
 +    return (
 +      codexPickerLoadProviderRoutingConfig(!0).then((n) => {
-+        e &&
++        if (e) {
++          let e = codexReadCustomProviderChoice(n);
 +          (t(n),
-+          i(codexPickerProviderRoutingState().error),
-+          o((e) =>
-+            e === `auto` || n.providers.some((t) => t.id === e) ? e : `auto`,
-+          ));
++            i(codexPickerProviderRoutingState().error),
++            codexWriteCustomProviderChoice(e),
++            o(e));
++        }
 +      }),
 +      () => {
 +        e = !1;
@@ -393,10 +397,7 @@ PICKER_DIFF = r"""@@ -10162,6 +10162,204 @@
 +  let s = (e) => (t) => {
 +      (t?.preventDefault(), codexWriteCustomProviderChoice(e), o(e));
 +    },
-+    c =
-+      e.providers.find((t) => t.id === e.defaultProvider)?.label ??
-+      e.defaultProvider,
-+    l = e.providers.map((e) =>
++    c = e.providers.map((e) =>
 +      (0, FO.jsx)(
 +        zy.Item,
 +        {
@@ -427,16 +428,7 @@ PICKER_DIFF = r"""@@ -10162,6 +10162,204 @@
 +            }),
 +            children: `Provider config error — using fallback`,
 +          }),
-+      (0, FO.jsx)(zy.Item, {
-+        RightIcon: a === `auto` ? ct : void 0,
-+        SubText: (0, FO.jsx)(`span`, {
-+          className: `text-token-description-foreground`,
-+          children: `Uses the mapped provider for each model; ${c} when unmapped`,
-+        }),
-+        onSelect: s(`auto`),
-+        children: `Automatic`,
-+      }),
-+      l,
++      c,
 +      (0, FO.jsx)(zy.Separator, {}),
 +    ],
 +  });
@@ -601,15 +593,18 @@ def print_completion_summary(
         terminal_status("SUCCESS", "Patch installed successfully.", "32")
 
     terminal_heading("Custom provider config")
-    terminal_status("CONFIG", "Edit this file to customize provider routing:", "36", detail=config)
-    terminal_bullet("providers", "Providers displayed in the app menu.")
+    terminal_status("CONFIG", "Edit this file to customize provider selection:", "36", detail=config)
+    terminal_bullet(
+        "providers",
+        "Providers displayed in the app menu. Select one before starting or forking a task.",
+    )
     terminal_bullet(
         "model_providers",
-        "Maps each exact model slug to the provider used by Automatic mode.",
+        "Retained for generated-config compatibility; model IDs do not choose a provider.",
     )
     terminal_bullet(
         "default_provider",
-        "Provider used by Automatic mode when a model has no explicit mapping.",
+        "Provider selected when the saved choice is missing or no longer valid.",
     )
     terminal_status(
         "LINK",
@@ -751,10 +746,7 @@ def parse_args() -> argparse.Namespace:
         else home / ".codex"
     )
     parser = FancyArgumentParser(
-        description=(
-            "Add a dynamic provider selector and per-model provider routing to the "
-            "macOS ChatGPT/Codex desktop app."
-        )
+        description="Add an explicit provider selector to the macOS ChatGPT/Codex desktop app."
     )
     parser.add_argument(
         "--app",
@@ -773,6 +765,11 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=home / "Applications" / "ChatGPT Patch Backups",
         help="Directory in which a complete app backup is created",
+    )
+    parser.add_argument(
+        "--reapply-from",
+        type=Path,
+        help="Restore this matching original app backup, then apply the current patch",
     )
     parser.add_argument(
         "--overwrite-config",
@@ -1169,6 +1166,38 @@ def restore_backup(app: Path, backup: Path) -> Path:
     return failed_copy
 
 
+def validate_reapply_source(app: Path, backup: Path) -> Path:
+    app_info_path = app / "Contents" / "Info.plist"
+    app_asar_path = app / "Contents" / "Resources" / "app.asar"
+    backup_info_path = backup / "Contents" / "Info.plist"
+    backup_asar_path = backup / "Contents" / "Resources" / "app.asar"
+
+    if not app_info_path.is_file() or not app_asar_path.is_file():
+        raise PatchError(f"Not a supported ChatGPT app bundle: {app}")
+    if not backup_info_path.is_file() or not backup_asar_path.is_file():
+        raise PatchError(f"Not a supported original app backup: {backup}")
+    if not contains_marker(app_asar_path):
+        raise PatchError("The target app is not patched; omit --reapply-from")
+    if contains_marker(backup_asar_path):
+        raise PatchError("The reapply source is already patched; use an original backup")
+
+    app_info, _ = load_plist(app_info_path)
+    backup_info, _ = load_plist(backup_info_path)
+    app_version = (
+        str(app_info.get("CFBundleShortVersionString", "unknown")),
+        str(app_info.get("CFBundleVersion", "unknown")),
+    )
+    backup_version = (
+        str(backup_info.get("CFBundleShortVersionString", "unknown")),
+        str(backup_info.get("CFBundleVersion", "unknown")),
+    )
+    if app_version != backup_version:
+        raise PatchError(
+            "The reapply source does not match the target app version and build"
+        )
+    return backup
+
+
 def patch_app(app: Path, config: Path, backup_dir: Path, overwrite_config: bool) -> None:
     info_path = app / "Contents" / "Info.plist"
     resources = app / "Contents" / "Resources"
@@ -1361,6 +1390,17 @@ def main() -> int:
     try:
         app = args.app.expanduser().resolve()
         stop_target_app_processes(app, args.allow_running)
+        if args.reapply_from is not None:
+            backup = validate_reapply_source(
+                app, args.reapply_from.expanduser().resolve()
+            )
+            archived_patch = restore_backup(app, backup)
+            terminal_status(
+                "REAPPLY",
+                "Original backup restored; applying the current patch.",
+                "36",
+                detail=archived_patch,
+            )
         patch_app(
             app,
             args.config.expanduser().resolve(),

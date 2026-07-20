@@ -1,5 +1,8 @@
+from contextlib import redirect_stdout
+import io
 import json
 from pathlib import Path
+import plistlib
 import subprocess
 import tempfile
 import unittest
@@ -180,13 +183,88 @@ class PatcherTemplateTests(unittest.TestCase):
         self.assertNotIn("\n++", patcher.CENTRAL_DIFF)
         self.assertNotIn("\n++", patcher.PICKER_DIFF)
 
-    def test_thread_start_recomputes_provider_from_picker_selection(self):
-        expected = (
-            "if (e === `thread/start` && t != null && typeof t === `object`)\n"
-            "+    return { ...t, modelProvider: await codexProviderForThreadStart(t) };"
+    def test_provider_picker_defaults_legacy_auto_to_openai_without_showing_auto(self):
+        self.assertEqual(patcher.DEFAULT_PROVIDER_CONFIG["default_provider"], "openai")
+        self.assertNotIn("Automatic", patcher.PICKER_DIFF)
+        self.assertNotIn("modelProviders[e?.model]", patcher.CENTRAL_DIFF)
+        self.assertIn("e.defaultProvider", patcher.PICKER_DIFF)
+
+    def test_start_and_fork_use_the_explicit_picker_provider(self):
+        self.assertIn("thread/start", patcher.CENTRAL_DIFF)
+        self.assertIn("thread/fork", patcher.CENTRAL_DIFF)
+        self.assertIn(
+            "modelProvider: await codexSelectedProvider()", patcher.CENTRAL_DIFF
         )
 
-        self.assertIn(expected, patcher.CENTRAL_DIFF)
+    def test_patcher_help_describes_explicit_provider_selection(self):
+        output = io.StringIO()
+
+        with (
+            mock.patch.object(patcher.sys, "argv", ["patch_chatgpt_providers.py", "--help"]),
+            redirect_stdout(output),
+            self.assertRaisesRegex(SystemExit, "0"),
+        ):
+            patcher.parse_args()
+
+        self.assertIn("explicit provider selector", output.getvalue())
+        self.assertNotIn("per-model provider routing", output.getvalue())
+
+
+class ReapplyTests(unittest.TestCase):
+    def test_reapply_source_accepts_matching_original_app_backup(self):
+        self.assertTrue(hasattr(patcher, "validate_reapply_source"))
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = root / "ChatGPT.app"
+            backup = root / "ChatGPT-original.app"
+            for bundle in (app, backup):
+                resources = bundle / "Contents" / "Resources"
+                resources.mkdir(parents=True)
+                (resources / "app.asar").write_bytes(b"asar")
+                with (bundle / "Contents" / "Info.plist").open("wb") as handle:
+                    plistlib.dump(
+                        {
+                            "CFBundleShortVersionString": "26.715.31925",
+                            "CFBundleVersion": "5551",
+                        },
+                        handle,
+                    )
+
+            with mock.patch.object(
+                patcher,
+                "contains_marker",
+                side_effect=lambda path: path == app / "Contents" / "Resources" / "app.asar",
+            ):
+                self.assertEqual(patcher.validate_reapply_source(app, backup), backup)
+
+    def test_reapply_source_rejects_backup_from_another_app_build(self):
+        self.assertTrue(hasattr(patcher, "validate_reapply_source"))
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = root / "ChatGPT.app"
+            backup = root / "ChatGPT-original.app"
+            for bundle, build in ((app, "5551"), (backup, "5552")):
+                resources = bundle / "Contents" / "Resources"
+                resources.mkdir(parents=True)
+                (resources / "app.asar").write_bytes(b"asar")
+                with (bundle / "Contents" / "Info.plist").open("wb") as handle:
+                    plistlib.dump(
+                        {
+                            "CFBundleShortVersionString": "26.715.31925",
+                            "CFBundleVersion": build,
+                        },
+                        handle,
+                    )
+
+            with mock.patch.object(
+                patcher,
+                "contains_marker",
+                side_effect=lambda path: path == app / "Contents" / "Resources" / "app.asar",
+            ):
+                with self.assertRaisesRegex(patcher.PatchError, "does not match"):
+                    patcher.validate_reapply_source(app, backup)
 
 
 if __name__ == "__main__":

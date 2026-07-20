@@ -5,8 +5,7 @@ An unofficial patch for the macOS ChatGPT/Codex desktop app that adds per-task m
 The patch:
 
 - Adds a provider section to the model menu.
-- Sends the selected provider when a new task starts.
-- Maps model IDs to providers automatically.
+- Sends the explicitly selected provider when a new task starts or Side Chat forks.
 - Keeps tasks from all configured providers visible.
 - Keeps the normal ChatGPT login active for OpenAI models.
 
@@ -85,7 +84,7 @@ The script preserves all other TOML settings, including project configuration an
 
 Use `--catalog`, `--provider-config`, and `--config` to target alternate paths, or `--codex-bin` when the Codex CLI has a different executable name. Run `python3 sync_codex_models.py --help` for details.
 
-Restart ChatGPT/Codex after synchronization so it loads the new model catalog. Do not set a global `model_provider` if OpenAI and 9router should coexist in the desktop app; the patch selects a provider when each new task starts.
+Restart ChatGPT/Codex after synchronization so it loads the new model catalog. Do not set a global `model_provider` if OpenAI and 9router should coexist in the desktop app; choose the provider from the menu before each new task or Side Chat fork.
 
 ## Configure the patched provider menu
 
@@ -121,12 +120,14 @@ The sync script creates this file. A shortened example:
 ```
 
 - `providers` defines the providers displayed in the app menu.
-- `model_providers` maps exact clone slugs to 9router for Automatic mode.
-- `default_provider` handles models without an explicit mapping.
+- `default_provider` is used when the saved provider choice is missing or from an older version.
+- `model_providers` is retained in the generated file for compatibility, but the desktop patch does not use model IDs to route requests.
 - Every custom provider ID must match a `[model_providers.<id>]` section in `config.toml`.
 - API keys do not belong in this JSON file.
 
-The app reloads this file when the provider menu opens and before a new task starts. Repatching is not required after running the sync script.
+The provider menu is explicit: it defaults to ChatGPT / OpenAI and has no Automatic mode. Select 9router before starting a task or using Side Chat with a 9router model. The selected provider is sent for both new tasks and forks. Changing the model does not switch providers automatically.
+
+The app reloads this file when the provider menu opens and before a new task starts or forks. Repatching is not required after running the sync script.
 
 ## Updates and recovery
 
