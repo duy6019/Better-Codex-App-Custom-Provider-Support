@@ -629,7 +629,7 @@ def print_completion_summary(
 
     if backup is not None:
         terminal_heading("Recovery", "34")
-        terminal_status("BACKUP", "Complete original app backup:", "34", detail=backup)
+        terminal_status("BACKUP", "Managed original app backup:", "34", detail=backup)
 
     terminal_heading("Important", "33")
     terminal_status(
@@ -761,15 +761,9 @@ def parse_args() -> argparse.Namespace:
         help="Provider-routing JSON file in the effective Codex home",
     )
     parser.add_argument(
-        "--backup-dir",
-        type=Path,
-        default=home / "Applications" / "ChatGPT Patch Backups",
-        help="Directory in which a complete app backup is created",
-    )
-    parser.add_argument(
         "--reapply-from",
         type=Path,
-        help="Restore this matching original app backup, then apply the current patch",
+        help="Use this matching original app backup for one reapply",
     )
     parser.add_argument(
         "--overwrite-config",
@@ -1106,27 +1100,35 @@ def apply_unified_diff(path: Path, unified_diff: str) -> None:
     path.write_text(result, encoding="utf-8")
 
 
-def make_backup(app: Path, backup_dir: Path, version: str, build: str) -> Path:
-    backup_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    safe_version = re.sub(r"[^A-Za-z0-9._-]+", "-", version)
-    safe_build = re.sub(r"[^A-Za-z0-9._-]+", "-", build)
-    backup = backup_dir / (
-        f"ChatGPT-{safe_version}-build-{safe_build}-{timestamp}.app"
-    )
-    suffix = 1
-    while backup.exists():
-        backup = backup_dir / (
-            f"ChatGPT-{safe_version}-build-{safe_build}-{timestamp}-{suffix}.app"
+def make_backup(app: Path, backup: Path) -> Path:
+    """Atomically replace the one managed, verified original-app backup."""
+    source_asar = app / "Contents" / "Resources" / "app.asar"
+    backup.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=f".{backup.stem}.", dir=backup.parent))
+    candidate = staging / backup.name
+    previous = staging / "previous.app"
+    try:
+        run(
+            ["/usr/bin/ditto", str(app), str(candidate)],
+            label="Creating the managed original app backup",
         )
-        suffix += 1
-    run(
-        ["/usr/bin/ditto", str(app), str(backup)],
-        label="Creating a complete app backup",
-    )
-    if not (backup / "Contents" / "Resources" / "app.asar").is_file():
-        raise PatchError(f"Backup verification failed: {backup}")
-    return backup
+        candidate_asar = candidate / "Contents" / "Resources" / "app.asar"
+        if not candidate_asar.is_file() or contains_marker(candidate_asar):
+            raise PatchError(f"Backup verification failed: {candidate}")
+        if asar_header_hash(source_asar) != asar_header_hash(candidate_asar):
+            raise PatchError("Backup ASAR header does not match the original app")
+
+        if backup.exists():
+            os.replace(backup, previous)
+        try:
+            os.replace(candidate, backup)
+        except Exception:
+            if previous.exists():
+                os.replace(previous, backup)
+            raise
+        return backup
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
 
 def atomic_replace_file(source: Path, target: Path) -> None:
@@ -1154,16 +1156,24 @@ def restore_backup(app: Path, backup: Path) -> Path:
             f"{app.stem}.patch-failed-{timestamp}-{suffix}.app"
         )
         suffix += 1
-    os.replace(app, failed_copy)
+    staging = Path(tempfile.mkdtemp(prefix=f".{app.stem}.restore-", dir=app.parent))
+    restored_copy = staging / app.name
     try:
         run(
-            ["/usr/bin/ditto", str(backup), str(app)],
+            ["/usr/bin/ditto", str(backup), str(restored_copy)],
             label="Restoring the original app from backup",
         )
-    except Exception:
-        os.replace(failed_copy, app)
-        raise
-    return failed_copy
+        if not (restored_copy / "Contents" / "Resources" / "app.asar").is_file():
+            raise PatchError(f"Restore verification failed: {restored_copy}")
+        os.replace(app, failed_copy)
+        try:
+            os.replace(restored_copy, app)
+        except Exception:
+            os.replace(failed_copy, app)
+            raise
+        return failed_copy
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
 
 def validate_reapply_source(app: Path, backup: Path) -> Path:
@@ -1198,7 +1208,7 @@ def validate_reapply_source(app: Path, backup: Path) -> Path:
     return backup
 
 
-def patch_app(app: Path, config: Path, backup_dir: Path, overwrite_config: bool) -> None:
+def patch_app(app: Path, config: Path, backup: Path, overwrite_config: bool) -> None:
     info_path = app / "Contents" / "Info.plist"
     resources = app / "Contents" / "Resources"
     asar_path = resources / "app.asar"
@@ -1326,8 +1336,8 @@ def patch_app(app: Path, config: Path, backup_dir: Path, overwrite_config: bool)
         with patched_plist.open("wb") as handle:
             plistlib.dump(info, handle, fmt=plist_format, sort_keys=False)
 
-        backup = make_backup(app, backup_dir, version, build)
-        terminal_status("OK", "App backup created.", "32", detail=backup)
+        backup = make_backup(app, backup)
+        terminal_status("OK", "Managed original app backup verified.", "32", detail=backup)
 
         live_mutation_started = False
         try:
@@ -1389,22 +1399,28 @@ def main() -> int:
     args = parse_args()
     try:
         app = args.app.expanduser().resolve()
+        config = args.config.expanduser().resolve()
+        backup = config.parent / "ChatGPT-original.app"
         stop_target_app_processes(app, args.allow_running)
-        if args.reapply_from is not None:
-            backup = validate_reapply_source(
-                app, args.reapply_from.expanduser().resolve()
+        app_asar = app / "Contents" / "Resources" / "app.asar"
+        if app_asar.is_file() and contains_marker(app_asar):
+            reapply_source = (
+                args.reapply_from.expanduser().resolve()
+                if args.reapply_from is not None
+                else backup
             )
-            archived_patch = restore_backup(app, backup)
+            original = validate_reapply_source(app, reapply_source)
+            archived_patch = restore_backup(app, original)
             terminal_status(
                 "REAPPLY",
-                "Original backup restored; applying the current patch.",
+                "Managed original backup restored; applying the current patch.",
                 "36",
                 detail=archived_patch,
             )
         patch_app(
             app,
-            args.config.expanduser().resolve(),
-            args.backup_dir.expanduser().resolve(),
+            config,
+            backup,
             args.overwrite_config,
         )
     except PatchError as exc:

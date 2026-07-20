@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Use a verified, ephemeral app backup during patching and stop writing successful-install backups to `~/Applications/ChatGPT Patch Backups`.
+**Goal:** Keep one verified original backup for automatic repeat patching and stop writing timestamped backups to `~/Applications/ChatGPT Patch Backups`.
 
-**Architecture:** `patch_app` owns the temporary workspace, including the extracted ASAR and original-app recovery copy. `make_backup` writes the copy into that workspace and validates its ASAR header hash against the source. It remains usable by the existing rollback path until installation is fully verified.
+**Architecture:** `patch_app` owns the managed original backup at `~/.codex/ChatGPT-original.app`. `make_backup` atomically replaces that single copy after validating its ASAR header hash against the source. `main` restores it automatically if the target app is already patched, then runs the normal installation flow.
 
 **Tech Stack:** Python standard library, `unittest`, macOS `ditto`.
 
@@ -18,7 +18,7 @@
 
 ---
 
-### Task 1: Make installation recovery backups ephemeral
+### Task 1: Maintain one managed original backup and reapply automatically
 
 **Files:**
 - Modify: `patch_chatgpt_providers.py:579-1409`
@@ -26,9 +26,9 @@
 
 **Interfaces:**
 - Consumes: `make_backup(app: Path, backup_dir: Path, version: str, build: str) -> Path`
-- Produces: `make_backup(app: Path, backup_dir: Path, version: str, build: str) -> Path`, where `backup_dir` is the active temporary workspace.
+- Produces: `make_backup(app: Path, backup: Path) -> Path`, which atomically replaces a verified managed original backup.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 def test_installer_has_no_persistent_backup_directory_option(self):
@@ -42,30 +42,30 @@ def test_installer_has_no_persistent_backup_directory_option(self):
     self.assertNotIn("--backup-dir", output.getvalue())
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `python3 -m unittest tests.test_sync_codex_models.PatcherTemplateTests.test_installer_has_no_persistent_backup_directory_option -v`
 
 Expected: FAIL because the CLI still exposes `--backup-dir`.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```python
-with tempfile.TemporaryDirectory(prefix="chatgpt-provider-patch-") as temporary:
-    work = Path(temporary)
-    backup = make_backup(app, work / "original-app", version, build)
-    # Retain backup through all mutation and validation steps.
+managed_backup = config.parent / "ChatGPT-original.app"
+if contains_marker(app_asar):
+    restore_backup(app, validate_reapply_source(app, managed_backup))
+make_backup(app, managed_backup)
 ```
 
-Remove `--backup-dir`, remove recovery-backup output from the success summary, and simplify `patch_app` to derive the backup path from its temporary workspace. After copying, verify that the backup ASAR header hash equals the source ASAR header hash before any app file is replaced.
+Remove `--backup-dir`. After copying, verify that the backup ASAR header hash equals the source ASAR header hash before any app file is replaced; replace an older managed backup only after the new copy verifies. Restore that backup automatically before processing an already patched app.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `python3 -m unittest tests.test_sync_codex_models.PatcherTemplateTests.test_installer_has_no_persistent_backup_directory_option -v`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add patch_chatgpt_providers.py tests/test_patcher_safety.py
@@ -81,19 +81,19 @@ git commit -m "fix: use temporary app recovery backups"
 - Consumes: completed installer and unit tests.
 - Produces: verified test suite and CLI help output.
 
-- [ ] **Step 1: Run the complete test suite**
+- [x] **Step 1: Run the complete test suite**
 
 Run: `python3 -m unittest discover -v`
 
 Expected: PASS with zero failures and errors.
 
-- [ ] **Step 2: Run the CLI help smoke test**
+- [x] **Step 2: Run the CLI help smoke test**
 
 Run: `python3 patch_chatgpt_providers.py --help`
 
 Expected: exit 0 and no `--backup-dir` option.
 
-- [ ] **Step 3: Check the patch diff**
+- [x] **Step 3: Check the patch diff**
 
 Run: `git diff --check`
 
