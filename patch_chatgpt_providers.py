@@ -1132,6 +1132,31 @@ def make_backup(app: Path, backup: Path) -> Path:
         shutil.rmtree(staging, ignore_errors=True)
 
 
+def consolidate_legacy_backup(backup: Path, legacy_backup: Path | None) -> None:
+    if legacy_backup is None:
+        return
+    try:
+        shutil.rmtree(legacy_backup)
+    except OSError as exc:
+        try:
+            shutil.rmtree(backup)
+        except OSError as cleanup_exc:
+            raise PatchError(
+                "Could not consolidate original app backups; both copies require "
+                f"manual recovery: {legacy_backup}, {backup}"
+            ) from cleanup_exc
+        raise PatchError(
+            "Could not remove the legacy original backup; the canonical copy was "
+            "removed and the app was not changed"
+        ) from exc
+    terminal_status(
+        "MIGRATED",
+        "Legacy original backup moved to the managed backup location.",
+        "32",
+        detail=backup,
+    )
+
+
 def atomic_replace_file(source: Path, target: Path) -> None:
     original_stat = target.stat()
     fd, temporary_name = tempfile.mkstemp(prefix=f".{target.name}.patch-", dir=target.parent)
@@ -1213,7 +1238,14 @@ def validate_reapply_source(app: Path, backup: Path) -> Path:
     return backup
 
 
-def patch_app(app: Path, config: Path, backup: Path, overwrite_config: bool) -> None:
+def patch_app(
+    app: Path,
+    config: Path,
+    backup: Path,
+    overwrite_config: bool,
+    *,
+    legacy_backup: Path | None = None,
+) -> None:
     info_path = app / "Contents" / "Info.plist"
     resources = app / "Contents" / "Resources"
     asar_path = resources / "app.asar"
@@ -1343,6 +1375,7 @@ def patch_app(app: Path, config: Path, backup: Path, overwrite_config: bool) -> 
 
         backup = make_backup(app, backup)
         terminal_status("OK", "Managed original app backup verified.", "32", detail=backup)
+        consolidate_legacy_backup(backup, legacy_backup)
 
         live_mutation_started = False
         try:
@@ -1431,24 +1464,8 @@ def main() -> int:
             config,
             backup,
             args.overwrite_config,
+            legacy_backup=migrated_backup,
         )
-        if migrated_backup is not None:
-            try:
-                shutil.rmtree(migrated_backup)
-                terminal_status(
-                    "MIGRATED",
-                    "Legacy original backup moved to the managed backup location.",
-                    "32",
-                    detail=backup,
-                )
-            except OSError as exc:
-                terminal_status(
-                    "MIGRATE",
-                    f"Could not remove the legacy backup: {exc}",
-                    "33",
-                    detail=migrated_backup,
-                    stream=sys.stderr,
-                )
     except PatchError as exc:
         fail(str(exc))
     except PermissionError as exc:

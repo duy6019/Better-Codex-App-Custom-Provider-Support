@@ -291,7 +291,11 @@ class ManagedBackupTests(unittest.TestCase):
             validate.assert_called_once_with(resolved_app, resolved_backup)
             restore.assert_called_once_with(resolved_app, resolved_backup)
             patch_app.assert_called_once_with(
-                resolved_app, resolved_config, resolved_backup, False
+                resolved_app,
+                resolved_config,
+                resolved_backup,
+                False,
+                legacy_backup=None,
             )
 
     def test_main_migrates_legacy_custom_config_backup_after_reapplying(self):
@@ -324,12 +328,56 @@ class ManagedBackupTests(unittest.TestCase):
                     patcher, "validate_reapply_source", return_value=legacy_backup
                 ) as validate,
                 mock.patch.object(patcher, "restore_backup"),
-                mock.patch.object(patcher, "patch_app"),
+                mock.patch.object(patcher, "patch_app") as patch_app,
             ):
                 self.assertEqual(patcher.main(), 0)
 
             self.assertEqual(validate.call_args.args[1], legacy_backup.resolve())
-            self.assertFalse(legacy_backup.exists())
+            patch_app.assert_called_once_with(
+                app.resolve(),
+                config.resolve(),
+                managed_home.resolve() / "ChatGPT-original.app",
+                False,
+                legacy_backup=legacy_backup.resolve(),
+            )
+
+    def test_consolidate_legacy_backup_keeps_only_the_canonical_copy(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            canonical = root / ".codex" / "ChatGPT-original.app"
+            legacy = root / "custom" / "ChatGPT-original.app"
+            canonical.mkdir(parents=True)
+            legacy.mkdir(parents=True)
+
+            patcher.consolidate_legacy_backup(canonical, legacy)
+
+            self.assertTrue(canonical.exists())
+            self.assertFalse(legacy.exists())
+
+    def test_consolidate_legacy_backup_removes_canonical_copy_if_cleanup_fails(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            canonical = root / ".codex" / "ChatGPT-original.app"
+            legacy = root / "custom" / "ChatGPT-original.app"
+            canonical.mkdir(parents=True)
+            legacy.mkdir(parents=True)
+            remove_tree = patcher.shutil.rmtree
+
+            def fail_legacy_cleanup(path, **kwargs):
+                if path == legacy:
+                    raise OSError("simulated legacy cleanup failure")
+                return remove_tree(path, **kwargs)
+
+            with mock.patch.object(
+                patcher.shutil, "rmtree", side_effect=fail_legacy_cleanup
+            ):
+                with self.assertRaisesRegex(
+                    patcher.PatchError, "canonical copy was removed"
+                ):
+                    patcher.consolidate_legacy_backup(canonical, legacy)
+
+            self.assertFalse(canonical.exists())
+            self.assertTrue(legacy.exists())
 
     def test_restore_backup_preserves_the_app_when_restore_copy_is_incomplete(self):
         with tempfile.TemporaryDirectory() as temporary:

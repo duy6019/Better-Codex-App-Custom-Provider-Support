@@ -12,7 +12,7 @@ When the target app is already patched, the installer validates and restores the
 
 `--reapply-from` remains as a one-time migration override for an explicitly supplied original-app backup. It is no longer required for normal repeat installations.
 
-For installations created while the backup followed a custom `--config` directory, the first automatic reapply falls back to that legacy backup only when the canonical backup is absent. After a successful install, it removes the legacy copy so only the canonical original remains.
+For installations created while the backup followed a custom `--config` directory, the first automatic reapply falls back to that legacy backup only when the canonical backup is absent. It removes the legacy copy immediately after the canonical original is created and verified, before modifying app files. If consolidation fails, the installer removes the new canonical copy where possible and stops before app mutation.
 
 ## Verification
 
