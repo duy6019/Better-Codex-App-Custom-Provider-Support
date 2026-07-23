@@ -224,6 +224,27 @@ class PatcherTemplateTests(unittest.TestCase):
 
         self.assertNotIn("--backup-dir", output.getvalue())
 
+    def test_installer_help_describes_reapply_source_as_original_seed(self):
+        output = io.StringIO()
+        with (
+            mock.patch.object(
+                patcher.sys,
+                "argv",
+                ["patch_chatgpt_providers.py", "--help"],
+            ),
+            redirect_stdout(output),
+            self.assertRaisesRegex(SystemExit, "0"),
+        ):
+            patcher.parse_args()
+
+        help_text = output.getvalue()
+        self.assertIn("Seed the sibling original", help_text)
+        self.assertNotIn("backup paths", help_text)
+
+    def test_installer_source_has_no_patch_failed_naming(self):
+        source = Path(patcher.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("patch-failed", source)
+
     def test_provider_picker_renders_subcomponents_from_menu_namespace(self):
         hunk = patcher.parse_hunks(patcher.PICKER_DIFF)[0]
         diff = "@@ -1,1 +1,1 @@\n" + "\n".join(hunk) + "\n"
@@ -271,253 +292,6 @@ var PO,
 
         self.assertIn("CodexProviderPatchReact", patched)
         self.assertIn("(CodexProviderPatchReact = t(m(), 1))", patched)
-
-
-class ManagedBackupTests(unittest.TestCase):
-    def test_make_backup_replaces_the_single_managed_original_after_verification(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            app = root / "ChatGPT.app"
-            backup = root / ".codex" / "ChatGPT-original.app"
-            for bundle, contents in ((app, b"new"), (backup, b"old")):
-                resources = bundle / "Contents" / "Resources"
-                resources.mkdir(parents=True)
-                (resources / "app.asar").write_bytes(contents)
-
-            def copy_app(command, **_kwargs):
-                patcher.shutil.copytree(Path(command[1]), Path(command[2]))
-                return subprocess.CompletedProcess(command, 0, "")
-
-            with (
-                mock.patch.object(patcher, "run", side_effect=copy_app),
-                mock.patch.object(patcher, "asar_header_hash", return_value="hash"),
-                mock.patch.object(patcher, "contains_marker", return_value=False),
-            ):
-                self.assertEqual(patcher.make_backup(app, backup), backup)
-
-            self.assertEqual(
-                (backup / "Contents" / "Resources" / "app.asar").read_bytes(), b"new"
-            )
-            self.assertEqual(
-                list(backup.parent.glob(".ChatGPT-original.app.*")), []
-            )
-
-    def test_main_restores_managed_backup_before_reapplying(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            app = root / "ChatGPT.app"
-            config = root / "custom" / "desktop-model-providers.json"
-            managed_home = root / ".codex"
-            app_asar = app / "Contents" / "Resources" / "app.asar"
-            app_asar.parent.mkdir(parents=True)
-            app_asar.write_bytes(b"patched")
-            resolved_app = app.resolve()
-            resolved_config = config.resolve()
-            resolved_backup = managed_home.resolve() / "ChatGPT-original.app"
-            args = mock.Mock(
-                app=app,
-                config=config,
-                reapply_from=None,
-                overwrite_config=False,
-                allow_running=False,
-            )
-
-            with (
-                mock.patch.object(patcher, "parse_args", return_value=args),
-                mock.patch.dict(
-                    patcher.os.environ, {"CODEX_HOME": str(managed_home)}
-                ),
-                mock.patch.object(patcher, "stop_target_app_processes"),
-                mock.patch.object(patcher, "contains_marker", return_value=True),
-                mock.patch.object(
-                    patcher, "validate_reapply_source", return_value=resolved_backup
-                ) as validate,
-                mock.patch.object(patcher, "restore_backup") as restore,
-                mock.patch.object(patcher, "patch_app") as patch_app,
-            ):
-                self.assertEqual(patcher.main(), 0)
-
-            validate.assert_called_once_with(resolved_app, resolved_backup)
-            restore.assert_called_once_with(resolved_app, resolved_backup)
-            patch_app.assert_called_once_with(
-                resolved_app,
-                resolved_config,
-                resolved_backup,
-                False,
-                legacy_backup=None,
-            )
-
-    def test_main_migrates_legacy_custom_config_backup_after_reapplying(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            app = root / "ChatGPT.app"
-            config = root / "custom" / "desktop-model-providers.json"
-            legacy_backup = config.parent / "ChatGPT-original.app"
-            managed_home = root / ".codex"
-            app_asar = app / "Contents" / "Resources" / "app.asar"
-            app_asar.parent.mkdir(parents=True)
-            app_asar.write_bytes(b"patched")
-            legacy_backup.mkdir(parents=True)
-            args = mock.Mock(
-                app=app,
-                config=config,
-                reapply_from=None,
-                overwrite_config=False,
-                allow_running=False,
-            )
-
-            with (
-                mock.patch.object(patcher, "parse_args", return_value=args),
-                mock.patch.dict(
-                    patcher.os.environ, {"CODEX_HOME": str(managed_home)}
-                ),
-                mock.patch.object(patcher, "stop_target_app_processes"),
-                mock.patch.object(patcher, "contains_marker", return_value=True),
-                mock.patch.object(
-                    patcher, "validate_reapply_source", return_value=legacy_backup
-                ) as validate,
-                mock.patch.object(patcher, "restore_backup"),
-                mock.patch.object(patcher, "patch_app") as patch_app,
-            ):
-                self.assertEqual(patcher.main(), 0)
-
-            self.assertEqual(validate.call_args.args[1], legacy_backup.resolve())
-            patch_app.assert_called_once_with(
-                app.resolve(),
-                config.resolve(),
-                managed_home.resolve() / "ChatGPT-original.app",
-                False,
-                legacy_backup=legacy_backup.resolve(),
-            )
-
-    def test_main_consolidates_legacy_backup_for_an_unpatched_app_update(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            app = root / "ChatGPT.app"
-            config = root / "custom" / "desktop-model-providers.json"
-            legacy_backup = config.parent / "ChatGPT-original.app"
-            managed_home = root / ".codex"
-            app_asar = app / "Contents" / "Resources" / "app.asar"
-            app_asar.parent.mkdir(parents=True)
-            app_asar.write_bytes(b"original-update")
-            legacy_backup.mkdir(parents=True)
-            args = mock.Mock(
-                app=app,
-                config=config,
-                reapply_from=None,
-                overwrite_config=False,
-                allow_running=False,
-            )
-
-            with (
-                mock.patch.object(patcher, "parse_args", return_value=args),
-                mock.patch.dict(
-                    patcher.os.environ, {"CODEX_HOME": str(managed_home)}
-                ),
-                mock.patch.object(patcher, "stop_target_app_processes"),
-                mock.patch.object(patcher, "contains_marker", return_value=False),
-                mock.patch.object(patcher, "patch_app") as patch_app,
-            ):
-                self.assertEqual(patcher.main(), 0)
-
-            patch_app.assert_called_once_with(
-                app.resolve(),
-                config.resolve(),
-                managed_home.resolve() / "ChatGPT-original.app",
-                False,
-                legacy_backup=legacy_backup.resolve(),
-            )
-
-    def test_consolidate_legacy_backup_keeps_only_the_canonical_copy(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            canonical = root / ".codex" / "ChatGPT-original.app"
-            legacy = root / "custom" / "ChatGPT-original.app"
-            canonical.mkdir(parents=True)
-            legacy.mkdir(parents=True)
-
-            patcher.consolidate_legacy_backup(canonical, legacy)
-
-            self.assertTrue(canonical.exists())
-            self.assertFalse(legacy.exists())
-
-    def test_consolidate_legacy_backup_removes_canonical_copy_if_cleanup_fails(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            canonical = root / ".codex" / "ChatGPT-original.app"
-            legacy = root / "custom" / "ChatGPT-original.app"
-            canonical.mkdir(parents=True)
-            legacy.mkdir(parents=True)
-            remove_tree = patcher.shutil.rmtree
-
-            def fail_legacy_cleanup(path, **kwargs):
-                if path == legacy:
-                    raise OSError("simulated legacy cleanup failure")
-                return remove_tree(path, **kwargs)
-
-            with mock.patch.object(
-                patcher.shutil, "rmtree", side_effect=fail_legacy_cleanup
-            ):
-                with self.assertRaisesRegex(
-                    patcher.PatchError, "canonical copy was removed"
-                ):
-                    patcher.consolidate_legacy_backup(canonical, legacy)
-
-            self.assertFalse(canonical.exists())
-            self.assertTrue(legacy.exists())
-
-    def test_restore_backup_preserves_the_app_when_restore_copy_is_incomplete(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            app = root / "ChatGPT.app"
-            backup = root / "ChatGPT-original.app"
-            for bundle, contents in ((app, b"patched"), (backup, b"original")):
-                resources = bundle / "Contents" / "Resources"
-                resources.mkdir(parents=True)
-                (resources / "app.asar").write_bytes(contents)
-
-            def incomplete_copy(command, **_kwargs):
-                target = Path(command[2])
-                target.mkdir(parents=True)
-                (target / "partial-copy").write_text("incomplete", encoding="utf-8")
-                raise patcher.PatchError("simulated restore failure")
-
-            with mock.patch.object(patcher, "run", side_effect=incomplete_copy):
-                with self.assertRaisesRegex(patcher.PatchError, "simulated"):
-                    patcher.restore_backup(app, backup)
-
-            self.assertEqual(
-                (app / "Contents" / "Resources" / "app.asar").read_bytes(), b"patched"
-            )
-
-    def test_restore_backup_preserves_plugins_added_after_the_backup(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            app = root / "ChatGPT.app"
-            backup = root / "ChatGPT-original.app"
-            for bundle, contents in ((app, b"patched"), (backup, b"original")):
-                resources = bundle / "Contents" / "Resources"
-                resources.mkdir(parents=True)
-                (resources / "app.asar").write_bytes(contents)
-            plugin = app / "Contents" / "Resources" / "plugins" / "my-plugin"
-            plugin.mkdir(parents=True)
-            (plugin / "plugin.json").write_text('{"name":"my-plugin"}', encoding="utf-8")
-
-            def copy_with_ditto_semantics(command, **_kwargs):
-                source = Path(command[1])
-                destination = Path(command[2])
-                shutil.copytree(source, destination, dirs_exist_ok=True)
-                return subprocess.CompletedProcess(command, 0, "")
-
-            with mock.patch.object(patcher, "run", side_effect=copy_with_ditto_semantics):
-                patcher.restore_backup(app, backup)
-
-            self.assertEqual(
-                (app / "Contents" / "Resources" / "plugins" / "my-plugin" / "plugin.json").read_text(
-                    encoding="utf-8"
-                ),
-                '{"name":"my-plugin"}',
-            )
 
 
 class SiblingOriginalTests(unittest.TestCase):
@@ -688,31 +462,34 @@ class SiblingOriginalTests(unittest.TestCase):
             make_original.assert_called_once_with(app, original)
 
     def test_reapply_from_seeds_sibling_without_deleting_external_source(self):
-        app = Path("/Applications/ChatGPT.app")
-        original = Path("/Applications/ChatGPT-original.backup")
-        external = Path("/Volumes/Recovery/ChatGPT-clean.app")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = root / "Applications" / "ChatGPT.app"
+            original = root / "Applications" / "ChatGPT-original.backup"
+            external = root / ".codex" / "ChatGPT-original.app"
+            external.mkdir(parents=True)
 
-        with (
-            mock.patch.object(patcher, "contains_marker", return_value=True),
-            mock.patch.object(
-                patcher, "validate_original_source", return_value=external
-            ) as validate,
-            mock.patch.object(
-                patcher, "make_original_backup", return_value=original
-            ) as make_original,
-            mock.patch.object(patcher.shutil, "rmtree") as remove,
-        ):
-            result = patcher.ensure_original_backup(
-                app,
-                original,
-                reapply_from=external,
-                legacy_backups=(),
-            )
+            with (
+                mock.patch.object(patcher, "contains_marker", return_value=True),
+                mock.patch.object(
+                    patcher, "validate_original_source", return_value=external
+                ) as validate,
+                mock.patch.object(
+                    patcher, "make_original_backup", return_value=original
+                ) as make_original,
+                mock.patch.object(patcher.shutil, "rmtree") as remove,
+            ):
+                result = patcher.ensure_original_backup(
+                    app,
+                    original,
+                    reapply_from=external,
+                    legacy_backups=(external,),
+                )
 
-        self.assertEqual(result, original)
-        self.assertEqual(validate.call_args_list[-1], mock.call(app, original))
-        make_original.assert_called_once_with(external, original)
-        remove.assert_not_called()
+            self.assertEqual(result, original)
+            self.assertEqual(validate.call_args_list[-1], mock.call(app, original))
+            make_original.assert_called_once_with(external.resolve(), original)
+            remove.assert_not_called()
 
     def test_original_source_accepts_matching_patched_target(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -872,42 +649,260 @@ class RollbackSnapshotTests(unittest.TestCase):
             self.assertFalse(previous.exists())
 
 
-class ReapplyTests(unittest.TestCase):
-    def test_reapply_source_accepts_matching_original_app_backup(self):
-        self.assertTrue(hasattr(patcher, "validate_reapply_source"))
-
+class PatchTransactionTests(unittest.TestCase):
+    def test_main_uses_sibling_original_and_previous_paths(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             app = root / "ChatGPT.app"
-            backup = root / "ChatGPT-original.app"
-            for bundle in (app, backup):
-                resources = bundle / "Contents" / "Resources"
-                resources.mkdir(parents=True)
-                (resources / "app.asar").write_bytes(b"asar")
-                with (bundle / "Contents" / "Info.plist").open("wb") as handle:
-                    plistlib.dump(
-                        {
-                            "CFBundleShortVersionString": "26.715.31925",
-                            "CFBundleVersion": "5551",
-                        },
-                        handle,
-                    )
+            config = root / ".codex" / "desktop-model-providers.json"
+            app.mkdir()
+            args = mock.Mock(
+                app=app,
+                config=config,
+                reapply_from=None,
+                overwrite_config=False,
+                allow_running=False,
+            )
+            resolved_app = app.resolve()
+            resolved_config = config.resolve()
+            original, previous = patcher.managed_backup_paths(resolved_app)
 
-            with mock.patch.object(
-                patcher,
-                "contains_marker",
-                side_effect=lambda path: path == app / "Contents" / "Resources" / "app.asar",
-            ), mock.patch.object(patcher, "asar_header_hash", return_value="hash"), mock.patch.object(
-                patcher, "asar_integrity_hash", return_value="hash"
+            with (
+                mock.patch.object(patcher, "parse_args", return_value=args),
+                mock.patch.object(patcher, "stop_target_app_processes"),
+                mock.patch.object(
+                    patcher,
+                    "ensure_original_backup",
+                    return_value=original,
+                ) as ensure_original,
+                mock.patch.object(patcher, "patch_app") as patch_app,
             ):
-                self.assertEqual(patcher.validate_reapply_source(app, backup), backup)
+                self.assertEqual(patcher.main(), 0)
 
-    def test_reapply_source_rejects_corrupt_original_backup(self):
+            self.assertEqual(
+                ensure_original.call_args.args[:2],
+                (resolved_app, original),
+            )
+            self.assertIsNone(ensure_original.call_args.kwargs["reapply_from"])
+            patch_app.assert_called_once_with(
+                resolved_app,
+                resolved_config,
+                original,
+                previous,
+                False,
+            )
+
+    def test_main_stops_before_migration_when_previous_snapshot_exists(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             app = root / "ChatGPT.app"
-            backup = root / "ChatGPT-original.app"
-            for bundle in (app, backup):
+            config = root / ".codex" / "desktop-model-providers.json"
+            previous = app.with_name("ChatGPT-previous.backup")
+            app.mkdir()
+            previous.mkdir()
+            args = mock.Mock(
+                app=app,
+                config=config,
+                reapply_from=None,
+                overwrite_config=False,
+                allow_running=False,
+            )
+
+            with (
+                mock.patch.object(patcher, "parse_args", return_value=args),
+                mock.patch.object(patcher, "ensure_original_backup") as ensure_original,
+                mock.patch.object(patcher, "patch_app"),
+                self.assertRaisesRegex(SystemExit, "1"),
+            ):
+                patcher.main()
+
+            ensure_original.assert_not_called()
+
+    def test_build_patched_artifacts_extracts_from_original(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            original = root / "ChatGPT-original.backup"
+            work = root / "work"
+            resources = original / "Contents" / "Resources"
+            resources.mkdir(parents=True)
+            (resources / "app.asar").write_bytes(b"asar")
+            with (original / "Contents" / "Info.plist").open("wb") as handle:
+                plistlib.dump(
+                    {
+                        "ElectronAsarIntegrity": {
+                            "Resources/app.asar": {"hash": "hash"}
+                        }
+                    },
+                    handle,
+                )
+            work.mkdir()
+            commands = []
+
+            def stop_after_extract(command, **_kwargs):
+                commands.append(command)
+                raise patcher.PatchError("stop after extract")
+
+            with mock.patch.object(patcher, "run", side_effect=stop_after_extract):
+                with self.assertRaisesRegex(patcher.PatchError, "stop after extract"):
+                    patcher.build_patched_artifacts(original, work)
+
+            self.assertEqual(
+                commands[0],
+                [
+                    "npx",
+                    "--yes",
+                    patcher.ASAR_PACKAGE,
+                    "extract",
+                    str(resources / "app.asar"),
+                    str(work / "app"),
+                ],
+            )
+
+    def test_patch_app_builds_from_original_before_installing_live_app(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = root / "ChatGPT.app"
+            original = root / "ChatGPT-original.backup"
+            previous = root / "ChatGPT-previous.backup"
+            config = root / "desktop-model-providers.json"
+            for bundle in (app, original):
+                resources = bundle / "Contents" / "Resources"
+                resources.mkdir(parents=True)
+                (resources / "app.asar").write_bytes(b"asar")
+                (resources / "app.asar.unpacked").mkdir()
+                with (bundle / "Contents" / "Info.plist").open("wb") as handle:
+                    plistlib.dump({}, handle)
+            patched_asar = root / "patched.asar"
+            patched_plist = root / "patched.plist"
+
+            with (
+                mock.patch.object(patcher.sys, "platform", "darwin"),
+                mock.patch.object(patcher.shutil, "which", return_value="/usr/bin/npx"),
+                mock.patch.object(
+                    patcher, "ensure_provider_config", return_value="kept"
+                ),
+                mock.patch.object(
+                    patcher, "validate_original_source", return_value=original
+                ),
+                mock.patch.object(
+                    patcher,
+                    "validated_bundle_identity",
+                    return_value=(("26.715.72359", "5718"), "hash"),
+                ),
+                mock.patch.object(
+                    patcher,
+                    "build_patched_artifacts",
+                    return_value=(patched_asar, patched_plist),
+                ) as build,
+                mock.patch.object(patcher, "install_patched_artifacts") as install,
+            ):
+                patcher.patch_app(app, config, original, previous, False)
+
+            self.assertEqual(build.call_args.args[0], original)
+            install.assert_called_once_with(app, previous, patched_asar, patched_plist)
+
+    def test_install_failure_rolls_back_from_previous_not_original(self):
+        app = Path("/Applications/ChatGPT.app")
+        previous = Path("/Applications/ChatGPT-previous.backup")
+        patched_asar = Path("/tmp/patched.asar")
+        patched_plist = Path("/tmp/Info.plist")
+
+        with (
+            mock.patch.object(patcher, "make_previous_snapshot") as snapshot,
+            mock.patch.object(
+                patcher,
+                "atomic_replace_file",
+                side_effect=[None, patcher.PatchError("plist replacement failed")],
+            ),
+            mock.patch.object(patcher, "restore_previous_snapshot") as restore,
+            mock.patch.object(patcher, "remove_previous_snapshot") as remove,
+        ):
+            with self.assertRaisesRegex(
+                patcher.PatchError, "plist replacement failed"
+            ):
+                patcher.install_patched_artifacts(
+                    app, previous, patched_asar, patched_plist
+                )
+
+        snapshot.assert_called_once_with(app, previous)
+        restore.assert_called_once_with(app, previous)
+        remove.assert_called_once_with(previous)
+
+    def test_install_success_removes_previous_after_final_verification(self):
+        events = []
+        app = Path("/Applications/ChatGPT.app")
+        previous = Path("/Applications/ChatGPT-previous.backup")
+        patched_asar = Path("/tmp/patched.asar")
+        patched_plist = Path("/tmp/Info.plist")
+
+        with (
+            mock.patch.object(
+                patcher,
+                "make_previous_snapshot",
+                side_effect=lambda *_args: events.append("snapshot"),
+            ),
+            mock.patch.object(
+                patcher,
+                "atomic_replace_file",
+                side_effect=lambda *_args: events.append("replace"),
+            ),
+            mock.patch.object(
+                patcher,
+                "run",
+                side_effect=lambda *_args, **_kwargs: events.append("codesign"),
+            ),
+            mock.patch.object(patcher, "load_plist", return_value=({}, None)),
+            mock.patch.object(patcher, "asar_header_hash", return_value="hash"),
+            mock.patch.object(patcher, "asar_integrity_hash", return_value="hash"),
+            mock.patch.object(patcher, "contains_marker", return_value=True),
+            mock.patch.object(
+                patcher,
+                "remove_previous_snapshot",
+                side_effect=lambda *_args: events.append("remove"),
+            ),
+        ):
+            patcher.install_patched_artifacts(
+                app, previous, patched_asar, patched_plist
+            )
+
+        self.assertEqual(events[0], "snapshot")
+        self.assertEqual(events[-1], "remove")
+
+    def test_install_rollback_failure_retains_previous_snapshot(self):
+        app = Path("/Applications/ChatGPT.app")
+        previous = Path("/Applications/ChatGPT-previous.backup")
+        patched_asar = Path("/tmp/patched.asar")
+        patched_plist = Path("/tmp/Info.plist")
+
+        with (
+            mock.patch.object(patcher, "make_previous_snapshot"),
+            mock.patch.object(
+                patcher,
+                "atomic_replace_file",
+                side_effect=patcher.PatchError("replacement failed"),
+            ),
+            mock.patch.object(
+                patcher,
+                "restore_previous_snapshot",
+                side_effect=patcher.PatchError("rollback failed"),
+            ),
+            mock.patch.object(patcher, "remove_previous_snapshot") as remove,
+        ):
+            with self.assertRaisesRegex(patcher.PatchError, "replacement failed"):
+                patcher.install_patched_artifacts(
+                    app, previous, patched_asar, patched_plist
+                )
+
+        remove.assert_not_called()
+
+
+class ReapplyTests(unittest.TestCase):
+    def test_reapply_source_accepts_matching_clean_original(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = root / "ChatGPT.app"
+            original = root / "ChatGPT-original.backup"
+            for bundle in (app, original):
                 resources = bundle / "Contents" / "Resources"
                 resources.mkdir(parents=True)
                 (resources / "app.asar").write_bytes(b"asar")
@@ -916,41 +911,25 @@ class ReapplyTests(unittest.TestCase):
                         {
                             "CFBundleShortVersionString": "26.715.31925",
                             "CFBundleVersion": "5551",
-                            "ElectronAsarIntegrity": {
-                                "Resources/app.asar": {"hash": "expected"}
-                            },
                         },
                         handle,
                     )
 
             with (
-                mock.patch.object(
-                    patcher,
-                    "contains_marker",
-                    side_effect=lambda path: path
-                    == app / "Contents" / "Resources" / "app.asar",
-                ),
-                mock.patch.object(
-                    patcher,
-                    "asar_header_hash",
-                    side_effect=lambda path: (
-                        "expected"
-                        if path == app / "Contents" / "Resources" / "app.asar"
-                        else "corrupted"
-                    ),
-                ),
+                mock.patch.object(patcher, "contains_marker", return_value=False),
+                mock.patch.object(patcher, "asar_header_hash", return_value="hash"),
+                mock.patch.object(patcher, "asar_integrity_hash", return_value="hash"),
             ):
-                with self.assertRaisesRegex(patcher.PatchError, "backup ASAR"):
-                    patcher.validate_reapply_source(app, backup)
+                self.assertEqual(
+                    patcher.validate_original_source(app, original), original
+                )
 
-    def test_reapply_source_rejects_backup_from_another_app_build(self):
-        self.assertTrue(hasattr(patcher, "validate_reapply_source"))
-
+    def test_reapply_source_rejects_original_from_another_app_build(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             app = root / "ChatGPT.app"
-            backup = root / "ChatGPT-original.app"
-            for bundle, build in ((app, "5551"), (backup, "5552")):
+            original = root / "ChatGPT-original.backup"
+            for bundle, build in ((app, "5551"), (original, "5552")):
                 resources = bundle / "Contents" / "Resources"
                 resources.mkdir(parents=True)
                 (resources / "app.asar").write_bytes(b"asar")
@@ -963,15 +942,13 @@ class ReapplyTests(unittest.TestCase):
                         handle,
                     )
 
-            with mock.patch.object(
-                patcher,
-                "contains_marker",
-                side_effect=lambda path: path == app / "Contents" / "Resources" / "app.asar",
-            ), mock.patch.object(patcher, "asar_header_hash", return_value="hash"), mock.patch.object(
-                patcher, "asar_integrity_hash", return_value="hash"
+            with (
+                mock.patch.object(patcher, "contains_marker", return_value=False),
+                mock.patch.object(patcher, "asar_header_hash", return_value="hash"),
+                mock.patch.object(patcher, "asar_integrity_hash", return_value="hash"),
             ):
                 with self.assertRaisesRegex(patcher.PatchError, "does not match"):
-                    patcher.validate_reapply_source(app, backup)
+                    patcher.validate_original_source(app, original)
 
 
 if __name__ == "__main__":

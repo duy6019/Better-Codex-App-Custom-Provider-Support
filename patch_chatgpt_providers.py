@@ -9,7 +9,6 @@ cause a clean failure before the installed app is modified.
 from __future__ import annotations
 
 import argparse
-import datetime as dt
 import hashlib
 import json
 import os
@@ -627,7 +626,7 @@ def print_completion_summary(
 
     if backup is not None:
         terminal_heading("Recovery", "34")
-        terminal_status("BACKUP", "Managed original app backup:", "34", detail=backup)
+        terminal_status("BACKUP", "Clean original app backup:", "34", detail=backup)
 
     terminal_heading("Important", "33")
     terminal_status(
@@ -769,7 +768,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--reapply-from",
         type=Path,
-        help="Use this matching original app backup for one reapply",
+        help="Seed the sibling original from this matching clean app backup",
     )
     parser.add_argument(
         "--overwrite-config",
@@ -1126,37 +1125,6 @@ def apply_unified_diff(path: Path, unified_diff: str) -> None:
     path.write_text(result, encoding="utf-8")
 
 
-def make_backup(app: Path, backup: Path) -> Path:
-    """Atomically replace the one managed, verified original-app backup."""
-    source_asar = app / "Contents" / "Resources" / "app.asar"
-    backup.parent.mkdir(parents=True, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(prefix=f".{backup.stem}.", dir=backup.parent))
-    candidate = staging / backup.name
-    previous = staging / "previous.app"
-    try:
-        run(
-            ["/usr/bin/ditto", str(app), str(candidate)],
-            label="Creating the managed original app backup",
-        )
-        candidate_asar = candidate / "Contents" / "Resources" / "app.asar"
-        if not candidate_asar.is_file() or contains_marker(candidate_asar):
-            raise PatchError(f"Backup verification failed: {candidate}")
-        if asar_header_hash(source_asar) != asar_header_hash(candidate_asar):
-            raise PatchError("Backup ASAR header does not match the original app")
-
-        if backup.exists():
-            os.replace(backup, previous)
-        try:
-            os.replace(candidate, backup)
-        except Exception:
-            if previous.exists():
-                os.replace(previous, backup)
-            raise
-        return backup
-    finally:
-        shutil.rmtree(staging, ignore_errors=True)
-
-
 def validate_original_source(app: Path, original: Path) -> Path:
     app_version, _ = validated_bundle_identity(app, "target app")
     original_version, _ = validated_bundle_identity(
@@ -1213,11 +1181,15 @@ def ensure_original_backup(
     app_asar = app / "Contents" / "Resources" / "app.asar"
     app_is_patched = contains_marker(app_asar)
     original_resolved = original.resolve()
+    reapply_source_resolved = (
+        reapply_from.expanduser().resolve() if reapply_from is not None else None
+    )
     distinct_legacy = tuple(
         dict.fromkeys(
             path.expanduser().resolve()
             for path in legacy_backups
-            if path.expanduser().resolve() != original_resolved
+            if path.expanduser().resolve()
+            not in {original_resolved, reapply_source_resolved}
         )
     )
 
@@ -1281,31 +1253,6 @@ def ensure_original_backup(
     return original
 
 
-def consolidate_legacy_backup(backup: Path, legacy_backup: Path | None) -> None:
-    if legacy_backup is None:
-        return
-    try:
-        shutil.rmtree(legacy_backup)
-    except OSError as exc:
-        try:
-            shutil.rmtree(backup)
-        except OSError as cleanup_exc:
-            raise PatchError(
-                "Could not consolidate original app backups; both copies require "
-                f"manual recovery: {legacy_backup}, {backup}"
-            ) from cleanup_exc
-        raise PatchError(
-            "Could not remove the legacy original backup; the canonical copy was "
-            "removed and the app was not changed"
-        ) from exc
-    terminal_status(
-        "MIGRATED",
-        "Legacy original backup moved to the managed backup location.",
-        "32",
-        detail=backup,
-    )
-
-
 def atomic_replace_file(source: Path, target: Path) -> None:
     original_stat = target.stat()
     fd, temporary_name = tempfile.mkstemp(prefix=f".{target.name}.patch-", dir=target.parent)
@@ -1320,42 +1267,6 @@ def atomic_replace_file(source: Path, target: Path) -> None:
     finally:
         if temporary_path.exists():
             temporary_path.unlink()
-
-
-def restore_backup(app: Path, backup: Path) -> Path:
-    timestamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    failed_copy = app.with_name(f"{app.stem}.patch-failed-{timestamp}.app")
-    suffix = 1
-    while failed_copy.exists():
-        failed_copy = app.with_name(
-            f"{app.stem}.patch-failed-{timestamp}-{suffix}.app"
-        )
-        suffix += 1
-    staging = Path(tempfile.mkdtemp(prefix=f".{app.stem}.restore-", dir=app.parent))
-    restored_copy = staging / app.name
-    current_plugins = app / "Contents" / "Resources" / "plugins"
-    restored_plugins = restored_copy / "Contents" / "Resources" / "plugins"
-    try:
-        run(
-            ["/usr/bin/ditto", str(backup), str(restored_copy)],
-            label="Restoring the original app from backup",
-        )
-        if not (restored_copy / "Contents" / "Resources" / "app.asar").is_file():
-            raise PatchError(f"Restore verification failed: {restored_copy}")
-        if current_plugins.is_dir():
-            run(
-                ["/usr/bin/ditto", str(current_plugins), str(restored_plugins)],
-                label="Preserving plugins installed in the app bundle",
-            )
-        os.replace(app, failed_copy)
-        try:
-            os.replace(restored_copy, app)
-        except Exception:
-            os.replace(failed_copy, app)
-            raise
-        return failed_copy
-    finally:
-        shutil.rmtree(staging, ignore_errors=True)
 
 
 def make_previous_snapshot(app: Path, previous: Path) -> Path:
@@ -1434,49 +1345,160 @@ def remove_previous_snapshot(previous: Path) -> None:
         ) from exc
 
 
-def validate_reapply_source(app: Path, backup: Path) -> Path:
-    app_info_path = app / "Contents" / "Info.plist"
-    app_asar_path = app / "Contents" / "Resources" / "app.asar"
-    backup_info_path = backup / "Contents" / "Info.plist"
-    backup_asar_path = backup / "Contents" / "Resources" / "app.asar"
+def build_patched_artifacts(
+    original: Path, work: Path
+) -> tuple[Path, Path]:
+    info_path = original / "Contents" / "Info.plist"
+    asar_path = original / "Contents" / "Resources" / "app.asar"
+    info, plist_format = load_plist(info_path)
+    extracted = work / "app"
+    patched_asar = work / "app.asar"
+    patched_plist = work / "Info.plist"
 
-    if not app_info_path.is_file() or not app_asar_path.is_file():
-        raise PatchError(f"Not a supported ChatGPT app bundle: {app}")
-    if not backup_info_path.is_file() or not backup_asar_path.is_file():
-        raise PatchError(f"Not a supported original app backup: {backup}")
-    if not contains_marker(app_asar_path):
-        raise PatchError("The target app is not patched; omit --reapply-from")
-    if contains_marker(backup_asar_path):
-        raise PatchError("The reapply source is already patched; use an original backup")
+    run(
+        ["npx", "--yes", ASAR_PACKAGE, "extract", str(asar_path), str(extracted)],
+        label="Extracting application resources",
+    )
+    assets = extracted / "webview" / "assets"
+    if not assets.is_dir():
+        raise PatchError("Extracted app has no webview/assets directory")
 
-    app_info, _ = load_plist(app_info_path)
-    backup_info, _ = load_plist(backup_info_path)
-    if asar_header_hash(app_asar_path) != asar_integrity_hash(app_info):
-        raise PatchError("The target app's ASAR integrity verification failed")
-    if asar_header_hash(backup_asar_path) != asar_integrity_hash(backup_info):
-        raise PatchError("The original backup ASAR integrity verification failed")
-    app_version = (
-        str(app_info.get("CFBundleShortVersionString", "unknown")),
-        str(app_info.get("CFBundleVersion", "unknown")),
+    central = unique_candidate(
+        assets,
+        "artifact-tab-content.electron~notebook-preview-panel~app-main~business-checkout",
+        ("async prewarmThreadStart(", "async sendConfigReadRequest("),
+        "App Server client",
     )
-    backup_version = (
-        str(backup_info.get("CFBundleShortVersionString", "unknown")),
-        str(backup_info.get("CFBundleVersion", "unknown")),
+    picker = unique_candidate(
+        assets,
+        "settings-command-menu-section-items~new-thread-panel-page~settings-pag",
+        ("composer.intelligenceDropdown.tooltip",),
+        "model picker",
     )
-    if app_version != backup_version:
-        raise PatchError(
-            "The reapply source does not match the target app version and build"
+
+    run(
+        [
+            "npx",
+            "--yes",
+            PRETTIER_PACKAGE,
+            "--write",
+            str(central),
+            str(picker),
+        ],
+        label="Preparing the JavaScript bundles",
+    )
+    apply_unified_diff(central, CENTRAL_DIFF)
+    apply_unified_diff(picker, PICKER_DIFF)
+
+    if PATCH_MARKER.decode() not in central.read_text(encoding="utf-8"):
+        raise PatchError("Routing marker missing after patch")
+    if "CodexCustomProviderPickerSection" not in picker.read_text(encoding="utf-8"):
+        raise PatchError("Provider picker missing after patch")
+
+    run(
+        [
+            "npx",
+            "--yes",
+            PRETTIER_PACKAGE,
+            "--write",
+            str(central),
+            str(picker),
+        ],
+        label="Formatting and validating the patched JavaScript",
+    )
+    run(
+        ["npx", "--yes", ASAR_PACKAGE, "pack", str(extracted), str(patched_asar)],
+        label="Packing patched application resources",
+    )
+
+    if not contains_marker(patched_asar):
+        raise PatchError("Packed ASAR does not contain the patch marker")
+    patched_header_hash = asar_header_hash(patched_asar)
+    info["ElectronAsarIntegrity"]["Resources/app.asar"]["hash"] = patched_header_hash
+    with patched_plist.open("wb") as handle:
+        plistlib.dump(info, handle, fmt=plist_format, sort_keys=False)
+
+    return patched_asar, patched_plist
+
+
+def install_patched_artifacts(
+    app: Path,
+    previous: Path,
+    patched_asar: Path,
+    patched_plist: Path,
+) -> None:
+    info_path = app / "Contents" / "Info.plist"
+    asar_path = app / "Contents" / "Resources" / "app.asar"
+    make_previous_snapshot(app, previous)
+    try:
+        atomic_replace_file(patched_asar, asar_path)
+        atomic_replace_file(patched_plist, info_path)
+        run(
+            ["/usr/bin/codesign", "--deep", "--force", "--sign", "-", str(app)],
+            label="Applying the ad-hoc app signature",
         )
-    return backup
+        run(
+            [
+                "/usr/bin/codesign",
+                "--verify",
+                "--deep",
+                "--strict",
+                "--verbose=2",
+                str(app),
+            ],
+            label="Verifying the app signature",
+        )
+        final_info, _ = load_plist(info_path)
+        if asar_header_hash(asar_path) != asar_integrity_hash(final_info):
+            raise PatchError("Installed ASAR integrity verification failed")
+        if not contains_marker(asar_path):
+            raise PatchError("Installed ASAR is missing the patch marker")
+    except Exception:
+        terminal_status(
+            "RECOVERY",
+            "Installation failed after app files changed. Restoring the previous app.",
+            "33",
+            stream=sys.stderr,
+        )
+        try:
+            restore_previous_snapshot(app, previous)
+        except Exception as restore_exc:
+            terminal_panel(
+                "Recovery failed",
+                f"Automatic rollback failed: {restore_exc}\n"
+                f"The previous app snapshot remains at: {previous}",
+                "31",
+                stream=sys.stderr,
+            )
+        else:
+            try:
+                remove_previous_snapshot(previous)
+            except PatchError as cleanup_exc:
+                terminal_status(
+                    "CLEANUP",
+                    "The previous app was restored, but its snapshot remains.",
+                    "33",
+                    detail=f"{previous}: {cleanup_exc}",
+                    stream=sys.stderr,
+                )
+            terminal_status(
+                "RESTORED",
+                "The previous app state was restored.",
+                "32",
+                detail=app,
+                stream=sys.stderr,
+            )
+        raise
+
+    remove_previous_snapshot(previous)
 
 
 def patch_app(
     app: Path,
     config: Path,
-    backup: Path,
+    original: Path,
+    previous: Path,
     overwrite_config: bool,
-    *,
-    legacy_backup: Path | None = None,
 ) -> None:
     info_path = app / "Contents" / "Info.plist"
     resources = app / "Contents" / "Resources"
@@ -1501,168 +1523,23 @@ def patch_app(
         "36",
         detail=config,
     )
-
-    info, plist_format = load_plist(info_path)
-    version = str(info.get("CFBundleShortVersionString", "unknown"))
-    build = str(info.get("CFBundleVersion", "unknown"))
-    if contains_marker(asar_path):
-        terminal_status(
-            "APP",
-            f"Detected ChatGPT {version}, build {build}.",
-            "34",
-            detail=app,
-        )
-        print_completion_summary(config, already_installed=True)
-        return
-
-    current_header_hash = asar_header_hash(asar_path)
-    expected_header_hash = asar_integrity_hash(info)
-    if current_header_hash != expected_header_hash:
-        raise PatchError(
-            "The ASAR header does not match the current app's Info.plist integrity "
-            "metadata. The bundle may be incomplete or modified."
-        )
-    terminal_status(
-        "VERIFY",
-        "The original app's ASAR header integrity is valid.",
-        "32",
-        detail=current_header_hash,
-    )
+    validate_original_source(app, original)
+    version, _ = validated_bundle_identity(original, "clean original backup")
 
     terminal_heading("Installation", "35")
     terminal_status(
         "APP",
-        f"Preparing ChatGPT {version}, build {build}.",
+        f"Preparing ChatGPT {version[0]}, build {version[1]}.",
         "34",
         detail=app,
     )
     with tempfile.TemporaryDirectory(prefix="chatgpt-provider-patch-") as temporary:
-        work = Path(temporary)
-        extracted = work / "app"
-        patched_asar = work / "app.asar"
-        patched_plist = work / "Info.plist"
-
-        run(
-            ["npx", "--yes", ASAR_PACKAGE, "extract", str(asar_path), str(extracted)],
-            label="Extracting application resources",
+        patched_asar, patched_plist = build_patched_artifacts(
+            original, Path(temporary)
         )
-        assets = extracted / "webview" / "assets"
-        if not assets.is_dir():
-            raise PatchError("Extracted app has no webview/assets directory")
+        install_patched_artifacts(app, previous, patched_asar, patched_plist)
 
-        central = unique_candidate(
-            assets,
-            "artifact-tab-content.electron~notebook-preview-panel~app-main~business-checkout",
-            ("async prewarmThreadStart(", "async sendConfigReadRequest("),
-            "App Server client",
-        )
-        picker = unique_candidate(
-            assets,
-            "settings-command-menu-section-items~new-thread-panel-page~settings-pag",
-            ("composer.intelligenceDropdown.tooltip",),
-            "model picker",
-        )
-
-        run(
-            [
-                "npx",
-                "--yes",
-                PRETTIER_PACKAGE,
-                "--write",
-                str(central),
-                str(picker),
-            ],
-            label="Preparing the JavaScript bundles",
-        )
-        apply_unified_diff(central, CENTRAL_DIFF)
-        apply_unified_diff(picker, PICKER_DIFF)
-
-        if PATCH_MARKER.decode() not in central.read_text(encoding="utf-8"):
-            raise PatchError("Routing marker missing after patch")
-        if "CodexCustomProviderPickerSection" not in picker.read_text(encoding="utf-8"):
-            raise PatchError("Provider picker missing after patch")
-
-        run(
-            [
-                "npx",
-                "--yes",
-                PRETTIER_PACKAGE,
-                "--write",
-                str(central),
-                str(picker),
-            ],
-            label="Formatting and validating the patched JavaScript",
-        )
-        run(
-            ["npx", "--yes", ASAR_PACKAGE, "pack", str(extracted), str(patched_asar)],
-            label="Packing patched application resources",
-        )
-
-        if not contains_marker(patched_asar):
-            raise PatchError("Packed ASAR does not contain the patch marker")
-        patched_header_hash = asar_header_hash(patched_asar)
-        info["ElectronAsarIntegrity"]["Resources/app.asar"]["hash"] = patched_header_hash
-        with patched_plist.open("wb") as handle:
-            plistlib.dump(info, handle, fmt=plist_format, sort_keys=False)
-
-        backup = make_backup(app, backup)
-        terminal_status("OK", "Managed original app backup verified.", "32", detail=backup)
-        consolidate_legacy_backup(backup, legacy_backup)
-
-        live_mutation_started = False
-        try:
-            live_mutation_started = True
-            atomic_replace_file(patched_asar, asar_path)
-            atomic_replace_file(patched_plist, info_path)
-            run(
-                ["/usr/bin/codesign", "--deep", "--force", "--sign", "-", str(app)],
-                label="Applying the ad-hoc app signature",
-            )
-            run(
-                [
-                    "/usr/bin/codesign",
-                    "--verify",
-                    "--deep",
-                    "--strict",
-                    "--verbose=2",
-                    str(app),
-                ],
-                label="Verifying the app signature",
-            )
-
-            final_info, _ = load_plist(info_path)
-            if asar_header_hash(asar_path) != asar_integrity_hash(final_info):
-                raise PatchError("Installed ASAR integrity verification failed")
-            if not contains_marker(asar_path):
-                raise PatchError("Installed ASAR is missing the patch marker")
-        except Exception as exc:
-            if live_mutation_started:
-                terminal_status(
-                    "RECOVERY",
-                    "Installation failed after app files changed. Restoring the backup.",
-                    "33",
-                    stream=sys.stderr,
-                )
-                try:
-                    failed_copy = restore_backup(app, backup)
-                    terminal_status(
-                        "RESTORED",
-                        "The original app was restored. The failed patched copy was retained.",
-                        "32",
-                        detail=failed_copy,
-                        stream=sys.stderr,
-                    )
-                except Exception as restore_exc:
-                    terminal_panel(
-                        "Recovery failed",
-                        f"Automatic restoration failed: {restore_exc}\n"
-                        f"The full backup remains at: {backup}",
-                        "31",
-                        stream=sys.stderr,
-                    )
-            raise exc
-
-    print_completion_summary(config, backup=backup)
+    print_completion_summary(config, backup=original)
 
 
 def main() -> int:
@@ -1670,41 +1547,33 @@ def main() -> int:
     try:
         app = args.app.expanduser().resolve()
         config = args.config.expanduser().resolve()
-        backup = effective_codex_home().resolve() / "ChatGPT-original.app"
-        legacy_backup = config.parent / "ChatGPT-original.app"
-        migrated_backup = (
-            legacy_backup
-            if (
-                args.reapply_from is None
-                and not backup.exists()
-                and legacy_backup != backup
-                and legacy_backup.exists()
+        original, previous = managed_backup_paths(app)
+        legacy_backups = tuple(
+            dict.fromkeys(
+                (
+                    effective_codex_home().resolve() / "ChatGPT-original.app",
+                    config.parent / "ChatGPT-original.app",
+                )
             )
-            else None
         )
-        stop_target_app_processes(app, args.allow_running)
-        app_asar = app / "Contents" / "Resources" / "app.asar"
-        if app_asar.is_file() and contains_marker(app_asar):
-            if args.reapply_from is not None:
-                reapply_source = args.reapply_from.expanduser().resolve()
-            elif migrated_backup is not None:
-                reapply_source = migrated_backup
-            else:
-                reapply_source = backup
-            original = validate_reapply_source(app, reapply_source)
-            archived_patch = restore_backup(app, original)
-            terminal_status(
-                "REAPPLY",
-                "Managed original backup restored; applying the current patch.",
-                "36",
-                detail=archived_patch,
+        if previous.exists():
+            raise PatchError(
+                f"A previous app snapshot requires recovery or removal: {previous}"
             )
+
+        stop_target_app_processes(app, args.allow_running)
+        original = ensure_original_backup(
+            app,
+            original,
+            reapply_from=args.reapply_from,
+            legacy_backups=legacy_backups,
+        )
         patch_app(
             app,
             config,
-            backup,
+            original,
+            previous,
             args.overwrite_config,
-            legacy_backup=migrated_backup,
         )
     except PatchError as exc:
         fail(str(exc))
