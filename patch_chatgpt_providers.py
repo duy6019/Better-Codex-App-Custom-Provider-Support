@@ -742,6 +742,13 @@ def effective_codex_home() -> Path:
     return invoking_user_home() / ".codex"
 
 
+def managed_backup_paths(app: Path) -> tuple[Path, Path]:
+    return (
+        app.with_name(f"{app.stem}-original.backup"),
+        app.with_name(f"{app.stem}-previous.backup"),
+    )
+
+
 def parse_args() -> argparse.Namespace:
     codex_home = effective_codex_home()
     parser = FancyArgumentParser(
@@ -915,6 +922,26 @@ def asar_integrity_hash(plist: dict[str, Any]) -> str:
     if not isinstance(value, str):
         raise PatchError("Electron ASAR integrity hash is not a string")
     return value.lower()
+
+
+def validated_bundle_identity(
+    bundle: Path, label: str
+) -> tuple[tuple[str, str], str]:
+    info_path = bundle / "Contents" / "Info.plist"
+    asar_path = bundle / "Contents" / "Resources" / "app.asar"
+    if not bundle.is_dir() or not info_path.is_file() or not asar_path.is_file():
+        raise PatchError(f"Not a supported {label}: {bundle}")
+
+    info, _ = load_plist(info_path)
+    header_hash = asar_header_hash(asar_path)
+    if header_hash != asar_integrity_hash(info):
+        raise PatchError(f"The {label} ASAR integrity verification failed")
+
+    version = (
+        str(info.get("CFBundleShortVersionString", "unknown")),
+        str(info.get("CFBundleVersion", "unknown")),
+    )
+    return version, header_hash
 
 
 def app_path_variants(app: Path) -> set[str]:
@@ -1128,6 +1155,130 @@ def make_backup(app: Path, backup: Path) -> Path:
         return backup
     finally:
         shutil.rmtree(staging, ignore_errors=True)
+
+
+def validate_original_source(app: Path, original: Path) -> Path:
+    app_version, _ = validated_bundle_identity(app, "target app")
+    original_version, _ = validated_bundle_identity(
+        original, "clean original backup"
+    )
+    original_asar = original / "Contents" / "Resources" / "app.asar"
+    if contains_marker(original_asar):
+        raise PatchError("The clean original backup is already patched")
+    if app_version != original_version:
+        raise PatchError(
+            "The clean original backup does not match the target app version and build"
+        )
+    return original
+
+
+def make_original_backup(source: Path, original: Path) -> Path:
+    if source.resolve() == original.resolve():
+        validate_original_source(source, original)
+        return original
+
+    validate_original_source(source, source)
+    original.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(
+        tempfile.mkdtemp(prefix=f".{original.stem}.", dir=original.parent)
+    )
+    candidate = staging / original.name
+    displaced = staging / "displaced.backup"
+    try:
+        run(
+            ["/usr/bin/ditto", str(source), str(candidate)],
+            label="Creating the clean sibling original",
+        )
+        validate_original_source(source, candidate)
+        if original.exists():
+            os.replace(original, displaced)
+        try:
+            os.replace(candidate, original)
+        except Exception:
+            if displaced.exists():
+                os.replace(displaced, original)
+            raise
+        return original
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
+def ensure_original_backup(
+    app: Path,
+    original: Path,
+    *,
+    reapply_from: Path | None,
+    legacy_backups: tuple[Path, ...],
+) -> Path:
+    app_asar = app / "Contents" / "Resources" / "app.asar"
+    app_is_patched = contains_marker(app_asar)
+    original_resolved = original.resolve()
+    distinct_legacy = tuple(
+        dict.fromkeys(
+            path.expanduser().resolve()
+            for path in legacy_backups
+            if path.expanduser().resolve() != original_resolved
+        )
+    )
+
+    if reapply_from is not None:
+        source = reapply_from.expanduser().resolve()
+        validate_original_source(app, source)
+        make_original_backup(source, original)
+    elif original.exists():
+        try:
+            validate_original_source(app, original)
+        except PatchError:
+            if app_is_patched:
+                raise
+            make_original_backup(app, original)
+    elif app_is_patched:
+        source = None
+        last_error = None
+        for candidate in distinct_legacy:
+            if not candidate.exists():
+                continue
+            try:
+                validate_original_source(app, candidate)
+            except PatchError as exc:
+                last_error = exc
+                continue
+            source = candidate
+            break
+        if source is None and last_error is not None:
+            raise PatchError(
+                "No legacy original backup matches the patched target app"
+            ) from last_error
+        if source is None:
+            raise PatchError(
+                f"Missing clean original backup beside the patched app: {original}"
+            )
+        make_original_backup(source, original)
+    else:
+        make_original_backup(app, original)
+
+    validate_original_source(app, original)
+    migrated = []
+    for legacy in distinct_legacy:
+        if not legacy.exists():
+            continue
+        try:
+            shutil.rmtree(legacy)
+        except OSError as exc:
+            raise PatchError(
+                "The sibling original is verified, but the legacy original backup "
+                f"could not be removed: {legacy}"
+            ) from exc
+        migrated.append(legacy)
+
+    for legacy in migrated:
+        terminal_status(
+            "MIGRATED",
+            "Legacy original backup moved beside the target app.",
+            "32",
+            detail=f"{legacy} -> {original}",
+        )
+    return original
 
 
 def consolidate_legacy_backup(backup: Path, legacy_backup: Path | None) -> None:

@@ -520,6 +520,234 @@ class ManagedBackupTests(unittest.TestCase):
             )
 
 
+class SiblingOriginalTests(unittest.TestCase):
+    def test_managed_backup_paths_are_siblings_with_non_app_suffixes(self):
+        app = Path("/Applications/ChatGPT.app")
+
+        original, previous = patcher.managed_backup_paths(app)
+
+        self.assertEqual(original, Path("/Applications/ChatGPT-original.backup"))
+        self.assertEqual(previous, Path("/Applications/ChatGPT-previous.backup"))
+
+        custom = Path("/Users/test/Applications/Codex Preview.app")
+        custom_original, custom_previous = patcher.managed_backup_paths(custom)
+        self.assertEqual(
+            custom_original,
+            Path("/Users/test/Applications/Codex Preview-original.backup"),
+        )
+        self.assertEqual(
+            custom_previous,
+            Path("/Users/test/Applications/Codex Preview-previous.backup"),
+        )
+
+    def test_make_original_backup_replaces_verified_sibling_original(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = root / "ChatGPT.app"
+            original = root / "ChatGPT-original.backup"
+            for bundle, contents in ((app, b"new"), (original, b"old")):
+                resources = bundle / "Contents" / "Resources"
+                resources.mkdir(parents=True)
+                (resources / "app.asar").write_bytes(contents)
+                with (bundle / "Contents" / "Info.plist").open("wb") as handle:
+                    plistlib.dump(
+                        {
+                            "CFBundleShortVersionString": "26.715.72359",
+                            "CFBundleVersion": "5718",
+                        },
+                        handle,
+                    )
+
+            def copy_bundle(command, **_kwargs):
+                shutil.copytree(Path(command[1]), Path(command[2]))
+                return subprocess.CompletedProcess(command, 0, "")
+
+            with (
+                mock.patch.object(patcher, "run", side_effect=copy_bundle),
+                mock.patch.object(patcher, "contains_marker", return_value=False),
+                mock.patch.object(patcher, "asar_header_hash", return_value="hash"),
+                mock.patch.object(patcher, "asar_integrity_hash", return_value="hash"),
+            ):
+                result = patcher.make_original_backup(app, original)
+
+            self.assertEqual(result, original)
+            self.assertEqual(
+                (original / "Contents" / "Resources" / "app.asar").read_bytes(),
+                b"new",
+            )
+            self.assertEqual(list(root.glob(".ChatGPT-original.*")), [])
+
+    def test_ensure_original_backup_migrates_codex_home_then_removes_legacy(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = root / "Applications" / "ChatGPT.app"
+            original = app.with_name("ChatGPT-original.backup")
+            legacy = root / ".codex" / "ChatGPT-original.app"
+            app.mkdir(parents=True)
+            legacy.mkdir(parents=True)
+
+            def create_original(_source, destination):
+                destination.mkdir()
+                return destination
+
+            with (
+                mock.patch.object(
+                    patcher, "contains_marker", return_value=True
+                ),
+                mock.patch.object(
+                    patcher, "validate_original_source", return_value=legacy
+                ) as validate,
+                mock.patch.object(
+                    patcher, "make_original_backup", side_effect=create_original
+                ) as make_original,
+            ):
+                result = patcher.ensure_original_backup(
+                    app,
+                    original,
+                    reapply_from=None,
+                    legacy_backups=(legacy,),
+                )
+
+            self.assertEqual(result, original)
+            self.assertEqual(
+                validate.call_args_list,
+                [mock.call(app, legacy.resolve()), mock.call(app, original)],
+            )
+            make_original.assert_called_once_with(legacy.resolve(), original)
+            self.assertFalse(legacy.exists())
+            self.assertTrue(original.exists())
+
+    def test_legacy_cleanup_failure_keeps_verified_sibling_original(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = root / "ChatGPT.app"
+            original = root / "ChatGPT-original.backup"
+            legacy = root / ".codex" / "ChatGPT-original.app"
+            app.mkdir()
+            legacy.mkdir(parents=True)
+
+            def create_original(_source, destination):
+                destination.mkdir()
+                return destination
+
+            with (
+                mock.patch.object(patcher, "contains_marker", return_value=True),
+                mock.patch.object(
+                    patcher, "validate_original_source", return_value=legacy
+                ),
+                mock.patch.object(
+                    patcher, "make_original_backup", side_effect=create_original
+                ),
+                mock.patch.object(
+                    patcher.shutil,
+                    "rmtree",
+                    side_effect=OSError("permission denied"),
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    patcher.PatchError,
+                    "legacy original backup could not be removed",
+                ):
+                    patcher.ensure_original_backup(
+                        app,
+                        original,
+                        reapply_from=None,
+                        legacy_backups=(legacy,),
+                    )
+
+            self.assertTrue(original.exists())
+            self.assertTrue(legacy.exists())
+
+    def test_unpatched_update_replaces_stale_original_from_live_app(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = root / "ChatGPT.app"
+            original = root / "ChatGPT-original.backup"
+            app.mkdir()
+            original.mkdir()
+
+            with (
+                mock.patch.object(patcher, "contains_marker", return_value=False),
+                mock.patch.object(
+                    patcher,
+                    "validate_original_source",
+                    side_effect=[patcher.PatchError("does not match"), original],
+                ),
+                mock.patch.object(
+                    patcher, "make_original_backup", return_value=original
+                ) as make_original,
+            ):
+                result = patcher.ensure_original_backup(
+                    app,
+                    original,
+                    reapply_from=None,
+                    legacy_backups=(),
+                )
+
+            self.assertEqual(result, original)
+            make_original.assert_called_once_with(app, original)
+
+    def test_reapply_from_seeds_sibling_without_deleting_external_source(self):
+        app = Path("/Applications/ChatGPT.app")
+        original = Path("/Applications/ChatGPT-original.backup")
+        external = Path("/Volumes/Recovery/ChatGPT-clean.app")
+
+        with (
+            mock.patch.object(patcher, "contains_marker", return_value=True),
+            mock.patch.object(
+                patcher, "validate_original_source", return_value=external
+            ) as validate,
+            mock.patch.object(
+                patcher, "make_original_backup", return_value=original
+            ) as make_original,
+            mock.patch.object(patcher.shutil, "rmtree") as remove,
+        ):
+            result = patcher.ensure_original_backup(
+                app,
+                original,
+                reapply_from=external,
+                legacy_backups=(),
+            )
+
+        self.assertEqual(result, original)
+        self.assertEqual(validate.call_args_list[-1], mock.call(app, original))
+        make_original.assert_called_once_with(external, original)
+        remove.assert_not_called()
+
+    def test_original_source_accepts_matching_patched_target(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = root / "ChatGPT.app"
+            original = root / "ChatGPT-original.backup"
+            for bundle in (app, original):
+                resources = bundle / "Contents" / "Resources"
+                resources.mkdir(parents=True)
+                (resources / "app.asar").write_bytes(b"asar")
+                with (bundle / "Contents" / "Info.plist").open("wb") as handle:
+                    plistlib.dump(
+                        {
+                            "CFBundleShortVersionString": "26.715.72359",
+                            "CFBundleVersion": "5718",
+                        },
+                        handle,
+                    )
+
+            with (
+                mock.patch.object(
+                    patcher,
+                    "contains_marker",
+                    side_effect=lambda path: path
+                    == app / "Contents" / "Resources" / "app.asar",
+                ),
+                mock.patch.object(patcher, "asar_header_hash", return_value="hash"),
+                mock.patch.object(patcher, "asar_integrity_hash", return_value="hash"),
+            ):
+                self.assertEqual(
+                    patcher.validate_original_source(app, original),
+                    original,
+                )
+
+
 class ReapplyTests(unittest.TestCase):
     def test_reapply_source_accepts_matching_original_app_backup(self):
         self.assertTrue(hasattr(patcher, "validate_reapply_source"))
