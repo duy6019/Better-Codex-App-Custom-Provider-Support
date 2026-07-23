@@ -50,9 +50,9 @@ python3 patch_chatgpt_providers.py
 python3 sync_codex_models.py
 ```
 
-The installer closes processes belonging to the target app, creates a complete backup, patches `app.asar`, updates Electron's ASAR integrity metadata, and applies an ad-hoc signature.
+The installer closes processes belonging to the target app, maintains a verified clean original beside it, creates a transactional snapshot before mutation, patches `app.asar`, updates Electron's ASAR integrity metadata, and applies an ad-hoc signature.
 
-Run `python3 patch_chatgpt_providers.py --help` to see alternate app, config, and backup paths.
+Run `python3 patch_chatgpt_providers.py --help` to see alternate app and config paths.
 
 ## Sync Codex models and 9router
 
@@ -135,11 +135,16 @@ ChatGPT updates replace the patch. Run the installer again after an update.
 
 The installer is not tied to a fixed app version or archive hash. It patches compatible source structures and stops before modifying the installed app if an update changes the relevant code.
 
-Backups are stored by default in:
+For the default app path, recovery files are:
 
 ```text
-~/Applications/ChatGPT Patch Backups/
+/Applications/ChatGPT-original.backup
+/Applications/ChatGPT-previous.backup
 ```
+
+`ChatGPT-original.backup` is the clean source for every patch. `ChatGPT-previous.backup` exists only during an installation attempt and is used to restore the exact pre-patch state if installation fails. A successfully verified patch or rollback removes the previous snapshot.
+
+The installer migrates a valid legacy `~/.codex/ChatGPT-original.app` into the sibling original and deletes the legacy copy only after the new copy verifies. Existing `ChatGPT.patch-failed-*.app` bundles are not removed automatically.
 
 ## Disclaimer
 
