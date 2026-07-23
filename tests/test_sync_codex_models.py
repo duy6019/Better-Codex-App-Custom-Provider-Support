@@ -3,6 +3,7 @@ import io
 import json
 from pathlib import Path
 import plistlib
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -223,6 +224,54 @@ class PatcherTemplateTests(unittest.TestCase):
 
         self.assertNotIn("--backup-dir", output.getvalue())
 
+    def test_provider_picker_renders_subcomponents_from_menu_namespace(self):
+        hunk = patcher.parse_hunks(patcher.PICKER_DIFF)[0]
+        diff = "@@ -1,1 +1,1 @@\n" + "\n".join(hunk) + "\n"
+        source = "\n".join(line[1:] for line in hunk if line[0] in " -") + "\n"
+
+        with tempfile.TemporaryDirectory() as temporary:
+            bundle = Path(temporary) / "picker.js"
+            bundle.write_text(source, encoding="utf-8")
+
+            patcher.apply_unified_diff(bundle, diff)
+
+            patched = bundle.read_text(encoding="utf-8")
+
+        provider_section = patched.split(
+            "function CodexCustomProviderPickerSection()", 1
+        )[1].split("function MO(e)", 1)[0]
+        for component in ("Item", "Title", "Separator"):
+            self.assertIn(f"Ly.{component}", provider_section)
+            self.assertNotIn(f"zy.{component}", provider_section)
+
+    def test_picker_import_hunk_tolerates_added_upstream_initializers(self):
+        hunk = patcher.parse_hunks(patcher.PICKER_DIFF)[2]
+        diff = "@@ -1,1 +1,1 @@\n" + "\n".join(hunk) + "\n"
+        source = """}
+var PO,
+  FO,
+  IO = e(() => {
+    ((PO = w()),
+      T(),
+      Q(),
+      Mg(),
+      wg(),
+      Pg(),
+      (FO = k()));
+  }),
+"""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            bundle = Path(temporary) / "picker.js"
+            bundle.write_text(source, encoding="utf-8")
+
+            patcher.apply_unified_diff(bundle, diff)
+
+            patched = bundle.read_text(encoding="utf-8")
+
+        self.assertIn("CodexProviderPatchReact", patched)
+        self.assertIn("(CodexProviderPatchReact = t(m(), 1))", patched)
+
 
 class ManagedBackupTests(unittest.TestCase):
     def test_make_backup_replaces_the_single_managed_original_after_verification(self):
@@ -439,6 +488,35 @@ class ManagedBackupTests(unittest.TestCase):
 
             self.assertEqual(
                 (app / "Contents" / "Resources" / "app.asar").read_bytes(), b"patched"
+            )
+
+    def test_restore_backup_preserves_plugins_added_after_the_backup(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = root / "ChatGPT.app"
+            backup = root / "ChatGPT-original.app"
+            for bundle, contents in ((app, b"patched"), (backup, b"original")):
+                resources = bundle / "Contents" / "Resources"
+                resources.mkdir(parents=True)
+                (resources / "app.asar").write_bytes(contents)
+            plugin = app / "Contents" / "Resources" / "plugins" / "my-plugin"
+            plugin.mkdir(parents=True)
+            (plugin / "plugin.json").write_text('{"name":"my-plugin"}', encoding="utf-8")
+
+            def copy_with_ditto_semantics(command, **_kwargs):
+                source = Path(command[1])
+                destination = Path(command[2])
+                shutil.copytree(source, destination, dirs_exist_ok=True)
+                return subprocess.CompletedProcess(command, 0, "")
+
+            with mock.patch.object(patcher, "run", side_effect=copy_with_ditto_semantics):
+                patcher.restore_backup(app, backup)
+
+            self.assertEqual(
+                (app / "Contents" / "Resources" / "plugins" / "my-plugin" / "plugin.json").read_text(
+                    encoding="utf-8"
+                ),
+                '{"name":"my-plugin"}',
             )
 
 

@@ -399,7 +399,7 @@ PICKER_DIFF = r"""@@ -10162,6 +10162,204 @@
 +    },
 +    c = e.providers.map((e) =>
 +      (0, FO.jsx)(
-+        zy.Item,
++        Ly.Item,
 +        {
 +          RightIcon: a === e.id ? ct : void 0,
 +          SubText:
@@ -417,10 +417,10 @@ PICKER_DIFF = r"""@@ -10162,6 +10162,204 @@
 +    );
 +  return (0, FO.jsxs)(FO.Fragment, {
 +    children: [
-+      (0, FO.jsx)(zy.Title, { children: `Provider for new tasks` }),
++      (0, FO.jsx)(Ly.Title, { children: `Provider for new tasks` }),
 +      n == null
 +        ? null
-+        : (0, FO.jsx)(zy.Item, {
++        : (0, FO.jsx)(Ly.Item, {
 +            disabled: !0,
 +            SubText: (0, FO.jsx)(`span`, {
 +              className: `text-token-description-foreground`,
@@ -429,7 +429,7 @@ PICKER_DIFF = r"""@@ -10162,6 +10162,204 @@
 +            children: `Provider config error — using fallback`,
 +          }),
 +      c,
-+      (0, FO.jsx)(zy.Separator, {}),
++      (0, FO.jsx)(Ly.Separator, {}),
 +    ],
 +  });
 +}
@@ -444,7 +444,7 @@ PICKER_DIFF = r"""@@ -10162,6 +10162,204 @@
              a,
              (0, FO.jsx)(`div`, {
                className: `vertical-scroll-fade-mask flex max-h-[250px] flex-col overflow-y-auto`,
-@@ -10984,8 +11183,10 @@
+@@ -10984,6 +11183,8 @@
  }
  var PO,
    FO,
@@ -453,8 +453,6 @@ PICKER_DIFF = r"""@@ -10162,6 +10162,204 @@
      ((PO = w()),
 +      (CodexProviderPatchReact = t(m(), 1)),
        T(),
-       Q(),
-       Pg(),
 """
 
 
@@ -1184,6 +1182,8 @@ def restore_backup(app: Path, backup: Path) -> Path:
         suffix += 1
     staging = Path(tempfile.mkdtemp(prefix=f".{app.stem}.restore-", dir=app.parent))
     restored_copy = staging / app.name
+    current_plugins = app / "Contents" / "Resources" / "plugins"
+    restored_plugins = restored_copy / "Contents" / "Resources" / "plugins"
     try:
         run(
             ["/usr/bin/ditto", str(backup), str(restored_copy)],
@@ -1191,6 +1191,11 @@ def restore_backup(app: Path, backup: Path) -> Path:
         )
         if not (restored_copy / "Contents" / "Resources" / "app.asar").is_file():
             raise PatchError(f"Restore verification failed: {restored_copy}")
+        if current_plugins.is_dir():
+            run(
+                ["/usr/bin/ditto", str(current_plugins), str(restored_plugins)],
+                label="Preserving plugins installed in the app bundle",
+            )
         os.replace(app, failed_copy)
         try:
             os.replace(restored_copy, app)
