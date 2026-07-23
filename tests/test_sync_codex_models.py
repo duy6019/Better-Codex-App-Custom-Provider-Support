@@ -748,6 +748,130 @@ class SiblingOriginalTests(unittest.TestCase):
                 )
 
 
+class RollbackSnapshotTests(unittest.TestCase):
+    def test_previous_snapshot_copies_exact_current_app_and_plugins(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = root / "ChatGPT.app"
+            previous = root / "ChatGPT-previous.backup"
+            resources = app / "Contents" / "Resources"
+            resources.mkdir(parents=True)
+            (resources / "app.asar").write_bytes(b"patched")
+            plugin = resources / "plugins" / "my-plugin" / "plugin.json"
+            plugin.parent.mkdir(parents=True)
+            plugin.write_text('{"name":"my-plugin"}', encoding="utf-8")
+
+            def copy_bundle(command, **_kwargs):
+                shutil.copytree(Path(command[1]), Path(command[2]))
+                return subprocess.CompletedProcess(command, 0, "")
+
+            with (
+                mock.patch.object(patcher, "run", side_effect=copy_bundle),
+                mock.patch.object(
+                    patcher,
+                    "validated_bundle_identity",
+                    return_value=(("26.715.72359", "5718"), "hash"),
+                ),
+            ):
+                result = patcher.make_previous_snapshot(app, previous)
+
+            self.assertEqual(result, previous)
+            self.assertEqual(
+                (
+                    previous
+                    / "Contents"
+                    / "Resources"
+                    / "plugins"
+                    / "my-plugin"
+                    / "plugin.json"
+                ).read_text(encoding="utf-8"),
+                '{"name":"my-plugin"}',
+            )
+
+    def test_previous_snapshot_refuses_to_overwrite_recovery_data(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = root / "ChatGPT.app"
+            previous = root / "ChatGPT-previous.backup"
+            app.mkdir()
+            previous.mkdir()
+
+            with self.assertRaisesRegex(
+                patcher.PatchError, "previous app snapshot already exists"
+            ):
+                patcher.make_previous_snapshot(app, previous)
+
+    def test_restore_previous_snapshot_reinstalls_exact_previous_state(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = root / "ChatGPT.app"
+            previous = root / "ChatGPT-previous.backup"
+            for bundle, payload in ((app, b"partial"), (previous, b"working")):
+                resources = bundle / "Contents" / "Resources"
+                resources.mkdir(parents=True)
+                (resources / "app.asar").write_bytes(payload)
+
+            def copy_bundle(command, **_kwargs):
+                shutil.copytree(Path(command[1]), Path(command[2]))
+                return subprocess.CompletedProcess(command, 0, "")
+
+            with (
+                mock.patch.object(patcher, "run", side_effect=copy_bundle),
+                mock.patch.object(
+                    patcher,
+                    "validated_bundle_identity",
+                    return_value=(("26.715.72359", "5718"), "hash"),
+                ),
+            ):
+                result = patcher.restore_previous_snapshot(app, previous)
+
+            self.assertEqual(result, app)
+            self.assertEqual(
+                (app / "Contents" / "Resources" / "app.asar").read_bytes(),
+                b"working",
+            )
+            self.assertTrue(previous.exists())
+
+    def test_incomplete_restore_preserves_current_app_and_previous_snapshot(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = root / "ChatGPT.app"
+            previous = root / "ChatGPT-previous.backup"
+            app.mkdir()
+            previous.mkdir()
+
+            with (
+                mock.patch.object(
+                    patcher,
+                    "run",
+                    side_effect=patcher.PatchError("copy failed"),
+                ),
+                mock.patch.object(
+                    patcher,
+                    "validated_bundle_identity",
+                    return_value=(("26.715.72359", "5718"), "hash"),
+                ),
+            ):
+                with self.assertRaisesRegex(patcher.PatchError, "copy failed"):
+                    patcher.restore_previous_snapshot(app, previous)
+
+            self.assertTrue(app.exists())
+            self.assertTrue(previous.exists())
+
+    def test_remove_previous_snapshot_deletes_only_the_snapshot(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = root / "ChatGPT.app"
+            previous = root / "ChatGPT-previous.backup"
+            app.mkdir()
+            previous.mkdir()
+
+            patcher.remove_previous_snapshot(previous)
+
+            self.assertTrue(app.exists())
+            self.assertFalse(previous.exists())
+
+
 class ReapplyTests(unittest.TestCase):
     def test_reapply_source_accepts_matching_original_app_backup(self):
         self.assertTrue(hasattr(patcher, "validate_reapply_source"))

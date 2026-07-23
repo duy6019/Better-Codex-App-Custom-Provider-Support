@@ -1358,6 +1358,82 @@ def restore_backup(app: Path, backup: Path) -> Path:
         shutil.rmtree(staging, ignore_errors=True)
 
 
+def make_previous_snapshot(app: Path, previous: Path) -> Path:
+    if previous.exists():
+        raise PatchError(
+            f"A previous app snapshot already exists; recover or remove it first: {previous}"
+        )
+
+    source_identity = validated_bundle_identity(app, "target app")
+    staging = Path(
+        tempfile.mkdtemp(prefix=f".{previous.stem}.", dir=previous.parent)
+    )
+    candidate = staging / previous.name
+    try:
+        run(
+            ["/usr/bin/ditto", str(app), str(candidate)],
+            label="Creating the previous app snapshot",
+        )
+        if (
+            validated_bundle_identity(candidate, "previous app snapshot")
+            != source_identity
+        ):
+            raise PatchError("The previous app snapshot does not match the target app")
+        os.replace(candidate, previous)
+        return previous
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
+def restore_previous_snapshot(app: Path, previous: Path) -> Path:
+    previous_identity = validated_bundle_identity(previous, "previous app snapshot")
+    staging = Path(
+        tempfile.mkdtemp(prefix=f".{app.stem}.rollback-", dir=app.parent)
+    )
+    restored = staging / app.name
+    displaced = staging / "mutated.app"
+    rejected = staging / "rejected.app"
+    try:
+        run(
+            ["/usr/bin/ditto", str(previous), str(restored)],
+            label="Restoring the previous app snapshot",
+        )
+        if (
+            validated_bundle_identity(restored, "rollback candidate")
+            != previous_identity
+        ):
+            raise PatchError(
+                "The rollback candidate does not match the previous snapshot"
+            )
+
+        os.replace(app, displaced)
+        try:
+            os.replace(restored, app)
+            if validated_bundle_identity(app, "restored app") != previous_identity:
+                raise PatchError(
+                    "The restored app does not match the previous snapshot"
+                )
+        except Exception:
+            if app.exists():
+                os.replace(app, rejected)
+            os.replace(displaced, app)
+            raise
+        return app
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
+def remove_previous_snapshot(previous: Path) -> None:
+    if not previous.exists():
+        return
+    try:
+        shutil.rmtree(previous)
+    except OSError as exc:
+        raise PatchError(
+            f"Could not remove the previous app snapshot: {previous}"
+        ) from exc
+
+
 def validate_reapply_source(app: Path, backup: Path) -> Path:
     app_info_path = app / "Contents" / "Info.plist"
     app_asar_path = app / "Contents" / "Resources" / "app.asar"
