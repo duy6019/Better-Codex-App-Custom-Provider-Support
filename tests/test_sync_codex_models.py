@@ -3,6 +3,7 @@ import io
 import json
 from pathlib import Path
 import plistlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -195,6 +196,107 @@ class PatcherTemplateTests(unittest.TestCase):
         self.assertIn("thread/fork", patcher.CENTRAL_DIFF)
         self.assertIn(
             "modelProvider: await codexSelectedProvider()", patcher.CENTRAL_DIFF
+        )
+
+    def test_picker_assigns_models_to_mapped_or_default_provider(self):
+        self.assertIn(
+            "return t.modelProviders[e] ?? t.defaultProvider;",
+            patcher.PICKER_DIFF,
+        )
+        self.assertIn(
+            "e.filter((e) => codexProviderForModel(e.model, t) === n)",
+            patcher.PICKER_DIFF,
+        )
+
+    def test_picker_filters_raw_models_before_composer_derivations(self):
+        self.assertIn(
+            "x = codexUseProviderFilteredModels(y?.models)",
+            patcher.PICKER_DIFF,
+        )
+        self.assertIn("B = wAs(x, S)", patcher.PICKER_DIFF)
+        self.assertIn("V = qos(x)", patcher.PICKER_DIFF)
+        self.assertIn(
+            "K = Wos(x, { includeUltraInSlider: s })",
+            patcher.PICKER_DIFF,
+        )
+
+    def test_picker_provider_state_notifies_model_filter_subscribers(self):
+        self.assertIn("e.listeners ??= new Set()", patcher.PICKER_DIFF)
+        self.assertIn("e.revision ??= 0", patcher.PICKER_DIFF)
+        self.assertIn(
+            "for (let t of e.listeners) t(e.revision);",
+            patcher.PICKER_DIFF,
+        )
+        self.assertIn("codexPickerSetCustomProviderChoice(e)", patcher.PICKER_DIFF)
+        self.assertIn("codexUseProviderFilteredModels", patcher.PICKER_DIFF)
+
+    def test_picker_reconciles_an_incompatible_selected_model(self):
+        self.assertIn("function codexCanonicalModelSlug(e)", patcher.PICKER_DIFF)
+        self.assertIn("e.startsWith(`cx/`) ? e.slice(3) : e", patcher.PICKER_DIFF)
+        self.assertIn(
+            "function codexFindProviderModelReplacement(e, t)",
+            patcher.PICKER_DIFF,
+        )
+        self.assertIn("return r ?? e[0];", patcher.PICKER_DIFF)
+        self.assertIn(
+            "function codexReplacementReasoningEffort(e, t)",
+            patcher.PICKER_DIFF,
+        )
+        self.assertIn(
+            "codexFindProviderModelReplacement(x, S)",
+            patcher.PICKER_DIFF,
+        )
+
+    def test_picker_model_filter_assigns_and_replaces_models(self):
+        source = "\n".join(
+            line[1:]
+            for line in patcher.parse_hunks(patcher.PICKER_DIFF)[0]
+            if line[0] in " +"
+        )
+        helpers = re.search(
+            r"function codexPickerProviderRoutingFallback\(\) \{.*?"
+            r"(?=function CodexCustomProviderPickerSection\(\))",
+            source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(helpers)
+        script = f"""
+const vm = require('node:vm');
+const context = {{
+  Set,
+  window: {{ localStorage: {{ getItem: () => null }} }},
+  CodexProviderPatchReact: {{
+    useState: (value) => [value, () => {{}}],
+    useEffect: () => {{}},
+    useMemo: (callback) => callback(),
+  }},
+}};
+vm.createContext(context);
+vm.runInContext({helpers.group()!r}, context);
+if (typeof context.codexFilterModelsForProvider !== 'function') {{
+  process.stdout.write(JSON.stringify(['missing-helpers']));
+}} else {{
+const config = {{
+  defaultProvider: 'openai',
+  providers: [{{ id: 'openai' }}, {{ id: '9router' }}],
+  modelProviders: {{ 'cx/gpt-5.6-sol': '9router' }},
+}};
+const models = [
+  {{ model: 'gpt-5.6-sol' }},
+  {{ model: 'cx/gpt-5.6-sol' }},
+  {{ model: 'gpt-5.4' }},
+];
+const filtered = context.codexFilterModelsForProvider(models, config, '9router');
+const replacement = context.codexFindProviderModelReplacement(filtered, 'gpt-5.6-sol');
+process.stdout.write(JSON.stringify([filtered.map((item) => item.model), replacement.model]));
+}}
+"""
+        result = subprocess.run(
+            ["node", "-e", script], capture_output=True, check=True, text=True
+        )
+        self.assertEqual(
+            json.loads(result.stdout),
+            [["cx/gpt-5.6-sol"], "cx/gpt-5.6-sol"],
         )
 
     def test_embedded_diffs_target_build_5813_bundle_symbols(self):
