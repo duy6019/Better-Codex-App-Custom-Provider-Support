@@ -75,9 +75,9 @@ DEFAULT_PROVIDER_CONFIG: dict[str, Any] = {
 
 
 CENTRAL_DIFF = r"""@@ -137534,6 +137678,146 @@
- function o9t(e) {
+ function p9t(e) {
    if (`data` in e) return e;
-   let t = obe(e);
+   let t = fbe(e);
    return t == null ? e : { ...e, data: t };
  }
 +function codexProviderRoutingFallback() {
@@ -171,12 +171,12 @@ CENTRAL_DIFF = r"""@@ -137534,6 +137678,146 @@
 +  return (
 +    (t.promise = (async () => {
 +      try {
-+        let { codexHome: e } = await tp(`codex-home`, {
++        let { codexHome: e } = await rp(`codex-home`, {
 +            params: { hostId: `local` },
 +          }),
 +          n = e.includes(`\\`) && !e.includes(`/`) ? `\\` : `/`,
 +          r = `${e.replace(/[\\/]+$/u, ``)}${n}desktop-model-providers.json`,
-+          { contents: i } = await tp(`read-file`, {
++          { contents: i } = await rp(`read-file`, {
 +            params: { hostId: `local`, path: r },
 +          }),
 +          a = codexNormalizeProviderRoutingConfig(JSON.parse(i));
@@ -226,7 +226,7 @@ CENTRAL_DIFF = r"""@@ -137534,6 +137678,146 @@
 +    return { ...t, modelProvider: await codexSelectedProvider() };
 +  return t;
 +}
- var s9t,
+ var m9t,
 @@ -137749,6 +137750,8 @@
          async sendRequest(e, t, n) {
            if (this.dispatchMessage == null)
@@ -251,14 +251,14 @@ CENTRAL_DIFF = r"""@@ -137534,6 +137678,146 @@
 PICKER_DIFF = r"""@@ -548655,6 +548655,204 @@
  var Xjs,
    Zjs = e(() => {
-     (qo(),
-       ad(),
-       KD(),
-       (Xjs = Aa(Q, (e, { get: t }) =>
+     (Ho(),
+       ed(),
+       DD(),
+       (Xjs = Oa(Q, (e, { get: t }) =>
          Yjs({
            conversationId: e,
-           resumeState: t(PD, e) ?? void 0,
-           turnCount: t(LD, e),
+           resumeState: t(hD, e) ?? void 0,
+           turnCount: t(vD, e),
          }),
        )));
    });
@@ -353,13 +353,13 @@ PICKER_DIFF = r"""@@ -548655,6 +548655,204 @@
 +  return (
 +    (t.promise = (async () => {
 +      try {
-+        let { codexHome: e } = await tp(`codex-home`, {
++        let { codexHome: e } = await rp(`codex-home`, {
 +            params: { hostId: `local` },
 +          }),
 +          n = e.includes(`\\`) && !e.includes(`/`) ? `\\` : `/`,
 +          r = `${e.replace(/[\\/]+$/u, ``)}${n}desktop-model-providers.json`;
 +        t.configPath = r;
-+        let { contents: i } = await tp(`read-file`, {
++        let { contents: i } = await rp(`read-file`, {
 +            params: { hostId: `local`, path: r },
 +          }),
 +          a = codexPickerNormalizeProviderRoutingConfig(JSON.parse(i));
@@ -419,14 +419,14 @@ PICKER_DIFF = r"""@@ -548655,6 +548655,204 @@
 +      (t?.preventDefault(), codexWriteCustomProviderChoice(e), o(e));
 +    },
 +    c = e.providers.map((e) =>
-+      (0, wQ.jsx)(
-+        yz.Item,
++      (0, TQ.jsx)(
++        KR.Item,
 +        {
-+          RightIcon: a === e.id ? Ym : void 0,
++          RightIcon: a === e.id ? Bm : void 0,
 +          SubText:
 +            e.description.length === 0
 +              ? null
-+              : (0, wQ.jsx)(`span`, {
++              : (0, TQ.jsx)(`span`, {
 +                  className: `text-token-description-foreground`,
 +                  children: e.description,
 +                }),
@@ -436,21 +436,21 @@ PICKER_DIFF = r"""@@ -548655,6 +548655,204 @@
 +        e.id,
 +      ),
 +    );
-+  return (0, wQ.jsxs)(wQ.Fragment, {
++  return (0, TQ.jsxs)(TQ.Fragment, {
 +    children: [
-+      (0, wQ.jsx)(yz.Title, { children: `Provider for new tasks` }),
++      (0, TQ.jsx)(KR.Title, { children: `Provider for new tasks` }),
 +      n == null
 +        ? null
-+        : (0, wQ.jsx)(yz.Item, {
++        : (0, TQ.jsx)(KR.Item, {
 +            disabled: !0,
-+            SubText: (0, wQ.jsx)(`span`, {
++            SubText: (0, TQ.jsx)(`span`, {
 +              className: `text-token-description-foreground`,
 +              children: n,
 +            }),
 +            children: `Provider config error — using fallback`,
 +          }),
 +      c,
-+      (0, wQ.jsx)(yz.Separator, {}),
++      (0, TQ.jsx)(KR.Separator, {}),
 +    ],
 +  });
 +}
@@ -458,21 +458,21 @@ PICKER_DIFF = r"""@@ -548655,6 +548655,204 @@
    let t = (0, eMs.c)(164),
      {
 @@ -548925,6 +549036,1 @@
-       : ((g = (0, wQ.jsxs)(wQ.Fragment, {
+       : ((g = (0, TQ.jsxs)(TQ.Fragment, {
            children: [
-+            (0, wQ.jsx)(CodexCustomProviderPickerSection, {}),
++            (0, TQ.jsx)(CodexCustomProviderPickerSection, {}),
              m,
-             (0, wQ.jsx)(`div`, {
+             (0, TQ.jsx)(`div`, {
                className: `vertical-scroll-fade-mask flex max-h-[250px] flex-col overflow-y-auto`,
 @@ -549575,6 +549577,8 @@
  }
  var eMs,
-   wQ,
+   TQ,
 +  CodexProviderPatchReact,
    tMs = e(() => {
      ((eMs = c()),
 +      (CodexProviderPatchReact = r(o(), 1)),
-       fd(),
+       sd(),
 """
 
 

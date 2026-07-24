@@ -197,19 +197,31 @@ class PatcherTemplateTests(unittest.TestCase):
             "modelProvider: await codexSelectedProvider()", patcher.CENTRAL_DIFF
         )
 
-    def test_embedded_diffs_target_build_5813_bundle_symbols(self):
+    def test_embedded_diffs_target_build_5828_bundle_symbols(self):
+        self.assertIn("function p9t(e)", patcher.CENTRAL_DIFF)
+        self.assertIn("let t = fbe(e);", patcher.CENTRAL_DIFF)
+        self.assertIn("var m9t,", patcher.CENTRAL_DIFF)
         self.assertIn("function Qjs(e)", patcher.PICKER_DIFF)
-        self.assertIn("tp(`codex-home`", patcher.CENTRAL_DIFF)
-        self.assertIn("tp(`codex-home`", patcher.PICKER_DIFF)
-        self.assertIn("wQ.jsx", patcher.PICKER_DIFF)
-        self.assertIn("yz.Item", patcher.PICKER_DIFF)
-        self.assertIn("Ym : void 0", patcher.PICKER_DIFF)
-        self.assertIn(
-            "(CodexProviderPatchReact = r(o(), 1))",
-            patcher.PICKER_DIFF,
-        )
-        self.assertNotIn("function MO(e)", patcher.PICKER_DIFF)
-        self.assertNotIn("Xe(`codex-home`", patcher.CENTRAL_DIFF)
+        for diff in (patcher.CENTRAL_DIFF, patcher.PICKER_DIFF):
+            self.assertIn("rp(`codex-home`", diff)
+            self.assertIn("rp(`read-file`", diff)
+            self.assertNotIn("tp(`codex-home`", diff)
+            self.assertNotIn("tp(`read-file`", diff)
+        self.assertIn("TQ.jsx", patcher.PICKER_DIFF)
+        self.assertIn("KR.Item", patcher.PICKER_DIFF)
+        self.assertIn("Bm : void 0", patcher.PICKER_DIFF)
+        self.assertIn("(CodexProviderPatchReact = r(o(), 1))", patcher.PICKER_DIFF)
+        for old_symbol in (
+            "function o9t(e)",
+            "let t = obe(e);",
+            "var s9t,",
+            "wQ.jsx",
+            "yz.Item",
+            "Ym : void 0",
+            "fd()",
+        ):
+            with self.subTest(old_symbol=old_symbol):
+                self.assertNotIn(old_symbol, patcher.CENTRAL_DIFF + patcher.PICKER_DIFF)
 
     def test_patcher_help_describes_explicit_provider_selection(self):
         output = io.StringIO()
@@ -276,27 +288,28 @@ class PatcherTemplateTests(unittest.TestCase):
             "function CodexCustomProviderPickerSection()", 1
         )[1].split("function Qjs(e)", 1)[0]
         for component in ("Item", "Title", "Separator"):
-            self.assertIn(f"yz.{component}", provider_section)
-            self.assertNotIn(f"Ly.{component}", provider_section)
+            self.assertIn(f"KR.{component}", provider_section)
+            self.assertNotIn(f"yz.{component}", provider_section)
 
     def test_picker_import_hunk_tolerates_added_upstream_initializers(self):
         hunk = patcher.parse_hunks(patcher.PICKER_DIFF)[2]
         diff = "@@ -1,1 +1,1 @@\n" + "\n".join(hunk) + "\n"
         source = """}
 var eMs,
-  wQ,
+  TQ,
   tMs = e(() => {
     ((eMs = c()),
-      fd(),
-      id(),
+      sd(),
+      extraInitializer(),
+      $u(),
       qcs(),
       nss(),
       rss(),
       OAs(),
-      Xm(),
-      KX(),
-      fD(),
-      bz(),
+      Vm(),
+      qX(),
+      qE(),
+      qR(),
       Tos(),
       hcs(),
       ncs(),
@@ -304,7 +317,7 @@ var eMs,
       Pos(),
       kos(),
       fcs(),
-      (wQ = J()));
+      (TQ = J()));
   }),
 """
 
