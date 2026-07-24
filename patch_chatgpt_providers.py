@@ -31,6 +31,7 @@ import textwrap
 import time
 from typing import Any, NoReturn, Sequence
 import xml.etree.ElementTree as ET
+import zipfile
 
 
 PATCH_MARKER = b"__codexDesktopModelProvidersPatchV2"
@@ -1615,26 +1616,139 @@ def _windows_store_full_name(paths: WindowsPatchPaths) -> str:
     return str(_windows_default_metadata(paths)["store_package_full_name"])
 
 
+def _windows_candidate_identity(candidate_msix: Path, custom_name: str) -> dict[str, str]:
+    """Read the custom identity from a packaged MSIX when it is available.
+
+    Unit tests use byte placeholders for candidates, so an unreadable ZIP is
+    treated as an unknown identity. Real MakeAppx output is a ZIP package and
+    must carry the expected custom name; its publisher/version become
+    verification filters before accepting a same-name registration.
+    """
+
+    try:
+        with zipfile.ZipFile(candidate_msix) as package:
+            manifest_name = next(
+                (
+                    name
+                    for name in package.namelist()
+                    if name.replace("\\", "/").lower() == "appxmanifest.xml"
+                ),
+                None,
+            )
+            if manifest_name is None:
+                return {}
+            contents = package.read(manifest_name).decode("utf-8")
+    except (
+        OSError,
+        KeyError,
+        UnicodeDecodeError,
+        zipfile.BadZipFile,
+    ):
+        return {}
+    _root, identity = _windows_identity_element_from_text(contents)
+    name = identity.get("Name") or ""
+    publisher = identity.get("Publisher") or ""
+    version = identity.get("Version") or ""
+    if name != custom_name:
+        raise PatchError(
+            "Windows candidate MSIX manifest has the wrong custom package identity"
+        )
+    return {
+        "custom_package_name": name,
+        "custom_package_publisher": publisher,
+        "source_version": version,
+    }
+
+
+def _windows_identity_element_from_text(contents: str) -> tuple[ET.Element, ET.Element]:
+    try:
+        root = ET.fromstring(contents)
+    except ET.ParseError as exc:
+        raise PatchError("Windows package manifest is malformed XML") from exc
+    identity = next(
+        (
+            element
+            for element in root.iter()
+            if element.tag.rsplit("}", 1)[-1] == "Identity"
+        ),
+        None,
+    )
+    if identity is None:
+        raise PatchError("Windows package manifest has no Identity element")
+    return root, identity
+
+
+def _windows_registration_match_lines(
+    custom_name: str,
+    *,
+    expected_full_name: str = "",
+    expected_family_name: str = "",
+    expected_publisher: str = "",
+    expected_version: str = "",
+) -> list[str]:
+    escaped_name = custom_name.replace("'", "''")
+    conditions = [f"$_.Name -eq '{escaped_name}'"]
+    if expected_full_name:
+        conditions.append(
+            f"$_.PackageFullName -eq '{expected_full_name.replace(chr(39), chr(39) * 2)}'"
+        )
+    if expected_family_name:
+        conditions.append(
+            f"$_.PackageFamilyName -eq "
+            f"'{expected_family_name.replace(chr(39), chr(39) * 2)}'"
+        )
+    if expected_publisher:
+        conditions.append(
+            f"$_.Publisher -eq "
+            f"'{expected_publisher.replace(chr(39), chr(39) * 2)}'"
+        )
+    if expected_version:
+        conditions.append(
+            f"$_.Version.ToString() -eq "
+            f"'{expected_version.replace(chr(39), chr(39) * 2)}'"
+        )
+    return [
+        f"$packages = @(Get-AppxPackage -Name '{escaped_name}')",
+        "$customMatches = @($packages | Where-Object {",
+        "  " + " -and ".join(conditions),
+        "})",
+        "if ($customMatches.Count -ne 1) { "
+        "throw 'Expected exactly one matching custom package registration' }",
+        "$custom = $customMatches[0]",
+    ]
+
+
 def _windows_add_script(
     candidate_msix: Path,
     custom_name: str,
     *,
     allow_running: bool,
     allow_existing: bool,
+    expected_full_name: str = "",
+    expected_family_name: str = "",
+    expected_publisher: str = "",
+    expected_version: str = "",
 ) -> str:
     escaped_path = str(candidate_msix).replace("'", "''")
     escaped_name = custom_name.replace("'", "''")
     lines = ["$ErrorActionPreference = 'Stop'"]
-    lines.extend(
-        [
-            f"$custom = Get-AppxPackage -Name '{escaped_name}' | "
-            "Select-Object -First 1",
-        ]
-    )
     if not allow_existing:
-        lines.append(
-            "if ($null -ne $custom) { "
-            "throw 'An unmanaged custom package is already registered' }"
+        lines.extend(
+            [
+                f"$existing = @(Get-AppxPackage -Name '{escaped_name}')",
+                "if ($existing.Count -ne 0) { "
+                "throw 'An unmanaged custom package is already registered' }",
+            ]
+        )
+    else:
+        lines.extend(
+            _windows_registration_match_lines(
+                custom_name,
+                expected_full_name=expected_full_name,
+                expected_family_name=expected_family_name,
+                expected_publisher=expected_publisher,
+                expected_version=expected_version,
+            )
         )
     if not allow_running:
         lines.extend(
@@ -1657,14 +1771,30 @@ def _windows_add_script(
 
 
 def _windows_query_script(custom_name: str) -> str:
-    escaped_name = custom_name.replace("'", "''")
+    return _windows_query_script_for_identity(custom_name)
+
+
+def _windows_query_script_for_identity(
+    custom_name: str,
+    *,
+    expected_full_name: str = "",
+    expected_family_name: str = "",
+    expected_publisher: str = "",
+    expected_version: str = "",
+) -> str:
     marker = PATCH_MARKER.decode().replace("'", "''")
-    return "\n".join(
+    lines = ["$ErrorActionPreference = 'Stop'"]
+    lines.extend(
+        _windows_registration_match_lines(
+            custom_name,
+            expected_full_name=expected_full_name,
+            expected_family_name=expected_family_name,
+            expected_publisher=expected_publisher,
+            expected_version=expected_version,
+        )
+    )
+    lines.extend(
         [
-            "$ErrorActionPreference = 'Stop'",
-            f"$custom = Get-AppxPackage -Name '{escaped_name}' | "
-            "Select-Object -First 1",
-            "if ($null -eq $custom) { throw 'Custom package is not registered' }",
             "$asar = Join-Path $custom.InstallLocation 'resources\\app.asar'",
             "if (-not (Test-Path -LiteralPath $asar -PathType Leaf)) { "
             "throw 'Custom package ASAR is missing' }",
@@ -1674,9 +1804,35 @@ def _windows_query_script(custom_name: str) -> str:
             "if (-not $text.Contains($marker)) { "
             "throw 'Custom package ASAR marker is missing' }",
             "$custom | Select-Object Name, PackageFullName, PackageFamilyName, "
-            "Version, InstallLocation | ConvertTo-Json -Compress",
+            "Publisher, Version, InstallLocation | ConvertTo-Json -Compress",
         ]
     )
+    return "\n".join(lines)
+
+
+def _windows_registration_query_script(
+    custom_name: str,
+    *,
+    expected_full_name: str = "",
+    expected_family_name: str = "",
+    expected_publisher: str = "",
+    expected_version: str = "",
+) -> str:
+    lines = ["$ErrorActionPreference = 'Stop'"]
+    lines.extend(
+        _windows_registration_match_lines(
+            custom_name,
+            expected_full_name=expected_full_name,
+            expected_family_name=expected_family_name,
+            expected_publisher=expected_publisher,
+            expected_version=expected_version,
+        )
+    )
+    lines.append(
+        "$custom | Select-Object Name, PackageFullName, PackageFamilyName, "
+        "Publisher, Version, InstallLocation | ConvertTo-Json -Compress"
+    )
+    return "\n".join(lines)
 
 
 def _windows_remove_script(custom_name: str, package_full_name: str) -> str:
@@ -1688,16 +1844,32 @@ def _windows_remove_script(custom_name: str, package_full_name: str) -> str:
     )
     return (
         "$ErrorActionPreference = 'Stop'; "
-        f"$custom = {package_expression} | Select-Object -First 1; "
-        "if ($null -ne $custom) { Remove-AppxPackage -Package "
-        "$custom.PackageFullName }"
+        f"$exactMatches = @({package_expression}); "
+        "if ($exactMatches.Count -gt 1) { "
+        "throw 'Multiple custom packages matched the exact package identity' }; "
+        "if ($exactMatches.Count -eq 1) { Remove-AppxPackage -Package "
+        "$exactMatches[0].PackageFullName }"
     )
 
 
 def _query_windows_custom_package(
-    command_runner: Any, custom_name: str
+    command_runner: Any,
+    custom_name: str,
+    *,
+    expected_full_name: str = "",
+    expected_family_name: str = "",
+    expected_publisher: str = "",
+    expected_version: str = "",
 ) -> dict[str, Any]:
-    command = _windows_powershell_command(_windows_query_script(custom_name))
+    command = _windows_powershell_command(
+        _windows_query_script_for_identity(
+            custom_name,
+            expected_full_name=expected_full_name,
+            expected_family_name=expected_family_name,
+            expected_publisher=expected_publisher,
+            expected_version=expected_version,
+        )
+    )
     try:
         result = command_runner(command)
     except PatchError:
@@ -1718,6 +1890,75 @@ def _query_windows_custom_package(
     return payload
 
 
+def _query_windows_custom_registration(
+    command_runner: Any,
+    custom_name: str,
+    *,
+    expected_full_name: str = "",
+    expected_family_name: str = "",
+    expected_publisher: str = "",
+    expected_version: str = "",
+) -> dict[str, Any]:
+    """Query registration identity without touching installed package content."""
+
+    command = _windows_powershell_command(
+        _windows_registration_query_script(
+            custom_name,
+            expected_full_name=expected_full_name,
+            expected_family_name=expected_family_name,
+            expected_publisher=expected_publisher,
+            expected_version=expected_version,
+        )
+    )
+    try:
+        result = command_runner(command)
+    except PatchError:
+        raise
+    except Exception as exc:
+        raise PatchError("Could not query the custom Windows package registration") from exc
+    if getattr(result, "returncode", 0) != 0:
+        raise PatchError("Could not query the custom Windows package registration")
+    output = getattr(result, "stdout", "") or ""
+    if not output.strip():
+        raise PatchError("The custom Windows package registration was not found")
+    try:
+        payload = json.loads(output.strip())
+    except json.JSONDecodeError as exc:
+        raise PatchError(
+            "Custom Windows package registration query returned invalid JSON"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise PatchError(
+            "Custom Windows package registration query returned invalid JSON"
+        )
+    if payload.get("Name") != custom_name:
+        raise PatchError(
+            "Custom Windows package registration has the wrong package name"
+        )
+    if expected_full_name and payload.get("PackageFullName") != expected_full_name:
+        raise PatchError(
+            "Custom Windows package registration has the wrong package full name"
+        )
+    if expected_family_name and payload.get("PackageFamilyName") != expected_family_name:
+        raise PatchError(
+            "Custom Windows package registration has the wrong package family name"
+        )
+    if expected_publisher and payload.get("Publisher") != expected_publisher:
+        raise PatchError(
+            "Custom Windows package registration has the wrong publisher"
+        )
+    if expected_version and str(payload.get("Version", "")) != str(expected_version):
+        raise PatchError(
+            "Custom Windows package registration has the wrong version"
+        )
+    package_full_name = payload.get("PackageFullName")
+    if not isinstance(package_full_name, str) or not package_full_name.strip():
+        raise PatchError(
+            "Custom Windows package registration omitted PackageFullName"
+        )
+    return payload
+
+
 def _verify_windows_custom_package(
     payload: dict[str, Any],
     paths: WindowsPatchPaths,
@@ -1728,8 +1969,25 @@ def _verify_windows_custom_package(
         raise PatchError("The custom Windows package is not registered")
     expected = expected_metadata or _windows_default_metadata(paths)
     custom_name = str(expected.get("custom_package_name") or _windows_custom_name(paths))
+    expected_full_name = str(expected.get("custom_package_full_name") or "")
+    if expected_full_name == custom_name:
+        expected_full_name = ""
+    expected_family_name = str(expected.get("custom_package_family_name") or "")
+    expected_publisher = str(expected.get("custom_package_publisher") or "")
     if payload.get("Name") != custom_name:
         raise PatchError("The custom Windows package registration has the wrong identity")
+    if expected_full_name and payload.get("PackageFullName") != expected_full_name:
+        raise PatchError(
+            "The custom Windows package registration has the wrong package full name"
+        )
+    if expected_family_name and payload.get("PackageFamilyName") != expected_family_name:
+        raise PatchError(
+            "The custom Windows package registration has the wrong package family name"
+        )
+    if expected_publisher and payload.get("Publisher") != expected_publisher:
+        raise PatchError(
+            "The custom Windows package registration has the wrong publisher"
+        )
     expected_version = expected.get("source_version")
     if expected_version and str(payload.get("Version", "")) != str(expected_version):
         raise PatchError("The custom Windows package registration has the wrong version")
@@ -1759,25 +2017,50 @@ def _recover_windows_deployment(
     custom_name: str,
     custom_full_name: str,
     had_previous: bool,
+    expected_metadata: dict[str, Any] | None = None,
+    registration_succeeded: bool = False,
 ) -> list[str]:
     failures: list[str] = []
+    candidate_expected = dict(expected_metadata or {})
     previous_metadata: dict[str, Any] = {}
     if had_previous and paths.previous.exists():
         try:
             previous_metadata = _windows_metadata(paths.previous)
         except Exception as exc:
             failures.append(f"read previous metadata: {exc}")
-    if not custom_full_name:
-        custom_full_name = str(
-            previous_metadata.get("custom_package_full_name") or ""
-        )
-    if not custom_full_name:
+    candidate_expected_full_name = str(
+        candidate_expected.get("candidate_package_full_name") or ""
+    )
+    candidate_expected_family_name = str(
+        candidate_expected.get("candidate_package_family_name")
+        or candidate_expected.get("custom_package_family_name")
+        or ""
+    )
+    candidate_expected_publisher = str(
+        candidate_expected.get("candidate_package_publisher")
+        or candidate_expected.get("custom_package_publisher")
+        or ""
+    )
+    candidate_expected_version = str(
+        candidate_expected.get("candidate_source_version")
+        or candidate_expected.get("source_version")
+        or ""
+    )
+    if not custom_full_name and registration_succeeded:
         try:
-            registered = _query_windows_custom_package(command_runner, custom_name)
-            if registered.get("Name") == custom_name:
-                custom_full_name = str(registered.get("PackageFullName") or "")
-        except Exception:
-            pass
+            registered = _query_windows_custom_registration(
+                command_runner,
+                custom_name,
+                expected_full_name=candidate_expected_full_name,
+                expected_family_name=candidate_expected_family_name,
+                expected_publisher=candidate_expected_publisher,
+                expected_version=candidate_expected_version,
+            )
+            custom_full_name = str(registered.get("PackageFullName") or "")
+        except Exception as exc:
+            failures.append(f"establish candidate package identity: {exc}")
+    if not custom_full_name:
+        custom_full_name = str(previous_metadata.get("custom_package_full_name") or "")
     if custom_full_name:
         try:
             _run_windows_package_command(
@@ -1797,6 +2080,11 @@ def _recover_windows_deployment(
             failures.append(f"inspect previous package: {exc}")
         if previous_msix is not None:
             try:
+                rollback_full_name = str(
+                    previous_metadata.get("custom_package_full_name") or ""
+                )
+                if rollback_full_name == custom_name:
+                    rollback_full_name = ""
                 _run_windows_package_command(
                     command_runner,
                     _windows_powershell_command(
@@ -1805,17 +2093,46 @@ def _recover_windows_deployment(
                             custom_name,
                             allow_running=True,
                             allow_existing=True,
+                            expected_full_name=rollback_full_name,
+                            expected_family_name=str(
+                                previous_metadata.get("custom_package_family_name") or ""
+                            ),
+                            expected_publisher=str(
+                                previous_metadata.get("custom_package_publisher") or ""
+                            ),
+                            expected_version=str(
+                                previous_metadata.get("source_version") or ""
+                            ),
                         )
                     ),
                 )
             except Exception as exc:
                 failures.append(f"reinstall previous package: {exc}")
             try:
-                payload = _query_windows_custom_package(command_runner, custom_name)
+                rollback_expected = dict(previous_metadata)
+                # The rollback package can legitimately be re-registered with
+                # a platform-generated full name after Add-AppxPackage. The
+                # immutable active full name remains the removal/process
+                # selector, while rollback verification checks the package
+                # family/name/version and marker.
+                rollback_expected.pop("custom_package_full_name", None)
+                payload = _query_windows_custom_package(
+                    command_runner,
+                    custom_name,
+                    expected_family_name=str(
+                        rollback_expected.get("custom_package_family_name") or ""
+                    ),
+                    expected_publisher=str(
+                        rollback_expected.get("custom_package_publisher") or ""
+                    ),
+                    expected_version=str(
+                        rollback_expected.get("source_version") or ""
+                    ),
+                )
                 _verify_windows_custom_package(
                     payload,
                     paths,
-                    expected_metadata=previous_metadata,
+                    expected_metadata=rollback_expected,
                 )
             except Exception as exc:
                 failures.append(f"verify previous package: {exc}")
@@ -1847,14 +2164,44 @@ def deploy_windows_msix(
 ) -> Path:
     """Install a signed custom package and transactionally promote its artifact."""
 
+    if paths.previous.exists():
+        raise PatchError(
+            f"A previous Windows package snapshot requires recovery or removal: "
+            f"{paths.previous.resolve()}"
+        )
     candidate_msix = Path(candidate_msix)
     if not candidate_msix.is_file():
         raise PatchError(f"Windows candidate MSIX is missing: {candidate_msix}")
     had_previous = paths.active.exists()
     snapshot_created = False
     registration_attempted = False
+    registration_succeeded = False
     custom_name = _windows_custom_name(paths)
     custom_full_name = ""
+    expected_metadata: dict[str, Any] = {}
+    candidate_identity = _windows_candidate_identity(candidate_msix, custom_name)
+    if had_previous:
+        expected_metadata.update(_windows_metadata(paths.active))
+        if candidate_identity:
+            expected_metadata.update(
+                {
+                    "candidate_package_publisher": candidate_identity.get(
+                        "custom_package_publisher", ""
+                    ),
+                    "candidate_source_version": candidate_identity.get(
+                        "source_version", ""
+                    ),
+                }
+            )
+    else:
+        expected_metadata["custom_package_name"] = custom_name
+        expected_metadata.update(candidate_identity)
+    expected_full_name = str(expected_metadata.get("custom_package_full_name") or "")
+    if expected_full_name == custom_name:
+        expected_full_name = ""
+    expected_family_name = str(expected_metadata.get("custom_package_family_name") or "")
+    expected_publisher = str(expected_metadata.get("custom_package_publisher") or "")
+    expected_version = str(expected_metadata.get("source_version") or "")
     try:
         if had_previous:
             snapshot_windows_active(paths)
@@ -1866,17 +2213,47 @@ def deploy_windows_msix(
                 custom_name,
                 allow_running=allow_running,
                 allow_existing=had_previous,
+                expected_full_name=expected_full_name,
+                expected_family_name=expected_family_name,
+                expected_publisher=expected_publisher,
+                expected_version=expected_version,
             )
         )
         registration_attempted = True
         _run_windows_package_command(command_runner, add_command)
+        registration_succeeded = True
 
-        installed = _query_windows_custom_package(command_runner, custom_name)
-        _verify_windows_custom_package(installed, paths)
+        installed = _query_windows_custom_package(
+            command_runner,
+            custom_name,
+            expected_full_name=expected_full_name,
+            expected_family_name=expected_family_name,
+            expected_publisher=expected_publisher,
+            expected_version=expected_version,
+        )
+        # The query is identity-bound in PowerShell; retain the explicit
+        # Python checks as a second boundary before mutating active state.
+        _verify_windows_custom_package(
+            installed,
+            paths,
+            expected_metadata={
+                **expected_metadata,
+                "custom_package_full_name": expected_full_name,
+                "custom_package_family_name": expected_family_name,
+                "custom_package_publisher": expected_publisher,
+                "source_version": expected_version,
+            },
+        )
         custom_full_name = str(installed.get("PackageFullName") or "")
         active_metadata = {
             "custom_package_name": custom_name,
-            "custom_package_full_name": custom_full_name or custom_name,
+            "custom_package_full_name": custom_full_name,
+            "custom_package_family_name": str(
+                installed.get("PackageFamilyName") or expected_family_name
+            ),
+            "custom_package_publisher": str(
+                installed.get("Publisher") or expected_publisher
+            ),
             "store_package_full_name": _windows_store_full_name(paths),
             "source_version": _windows_default_metadata(paths).get("source_version", ""),
         }
@@ -1893,6 +2270,8 @@ def deploy_windows_msix(
             custom_name=custom_name,
             custom_full_name=custom_full_name,
             had_previous=snapshot_created,
+            expected_metadata=expected_metadata,
+            registration_succeeded=registration_succeeded,
         )
         if recovery_failures:
             previous_location = paths.previous.resolve()

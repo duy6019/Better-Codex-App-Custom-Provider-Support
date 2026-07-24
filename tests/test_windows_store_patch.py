@@ -763,3 +763,137 @@ class WindowsRollbackTests(unittest.TestCase):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
+
+    def test_marker_verification_failure_still_removes_exact_registered_candidate(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = patcher.windows_patch_paths(root)
+            candidate = root / "candidate.msix"
+            candidate.write_bytes(b"candidate")
+            install = root / "installed-custom"
+            (install / "resources").mkdir(parents=True)
+            (install / "resources" / "app.asar").write_bytes(b"unmarked")
+            package_full_name = "OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__local"
+            payload = json.dumps(
+                {
+                    "Name": "OpenAI.ChatGPT.CodexPatch",
+                    "PackageFullName": package_full_name,
+                    "PackageFamilyName": "OpenAI.ChatGPT.CodexPatch_local",
+                    "Version": "1.2.3.4",
+                    "InstallLocation": str(install),
+                }
+            )
+            calls = []
+
+            def runner(command):
+                script = command[-1]
+                calls.append(script)
+                if "Add-AppxPackage" in script:
+                    return completed(command)
+                if "ConvertTo-Json" in script:
+                    if patcher.PATCH_MARKER.decode() in script:
+                        raise patcher.PatchError("marker verification failed")
+                    return completed(command, payload)
+                return completed(command)
+
+            with self.assertRaisesRegex(patcher.PatchError, "marker verification failed"):
+                patcher.deploy_windows_msix(
+                    candidate,
+                    paths,
+                    command_runner=runner,
+                )
+
+            remove_scripts = [script for script in calls if "Remove-AppxPackage" in script]
+            self.assertEqual(len(remove_scripts), 1)
+            self.assertIn(f"PackageFullName -eq '{package_full_name}'", remove_scripts[0])
+
+    def test_deployment_refuses_stale_previous_without_deleting_it(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = patcher.windows_patch_paths(root)
+            paths.previous.mkdir(parents=True)
+            (paths.previous / "recovery-evidence").write_text(
+                "retain", encoding="utf-8"
+            )
+            candidate = root / "candidate.msix"
+            candidate.write_bytes(b"candidate")
+            calls = []
+
+            with self.assertRaisesRegex(patcher.PatchError, "previous"):
+                patcher.deploy_windows_msix(
+                    candidate,
+                    paths,
+                    command_runner=lambda command: calls.append(command)
+                    or completed(command),
+                )
+
+            self.assertEqual(calls, [])
+            self.assertTrue((paths.previous / "recovery-evidence").exists())
+            self.assertFalse(paths.active.exists())
+
+    def test_update_binds_process_and_verification_to_active_custom_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = patcher.windows_patch_paths(root)
+            paths.active.mkdir(parents=True)
+            (paths.active / "previous.msix").write_bytes(b"previous")
+            (paths.active / "package.json").write_text(
+                json.dumps(
+                    {
+                        "custom_package_name": "OpenAI.ChatGPT.CodexPatch",
+                        "custom_package_full_name": (
+                            "OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__managed"
+                        ),
+                        "custom_package_family_name": (
+                            "OpenAI.ChatGPT.CodexPatch_managed"
+                        ),
+                        "custom_package_publisher": "CN=Codex Provider Patch",
+                        "source_version": "1.2.3.4",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            candidate = root / "candidate.msix"
+            candidate.write_bytes(b"candidate")
+            install = root / "installed-custom"
+            (install / "resources").mkdir(parents=True)
+            (install / "resources" / "app.asar").write_bytes(patcher.PATCH_MARKER)
+            payload = json.dumps(
+                {
+                    "Name": "OpenAI.ChatGPT.CodexPatch",
+                    "PackageFullName": (
+                        "OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__managed"
+                    ),
+                    "PackageFamilyName": "OpenAI.ChatGPT.CodexPatch_managed",
+                    "Publisher": "CN=Codex Provider Patch",
+                    "Version": "1.2.3.4",
+                    "InstallLocation": str(install),
+                }
+            )
+            calls = []
+
+            def runner(command):
+                calls.append(command[-1])
+                if "ConvertTo-Json" in command[-1]:
+                    return completed(command, payload)
+                return completed(command)
+
+            patcher.deploy_windows_msix(
+                candidate,
+                paths,
+                command_runner=runner,
+            )
+
+            install_script, verification_script = calls[:2]
+            self.assertNotIn("Select-Object -First 1", install_script)
+            self.assertIn(
+                "PackageFullName -eq "
+                "'OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__managed'",
+                install_script,
+            )
+            self.assertNotIn("Select-Object -First 1", verification_script)
+            self.assertIn(
+                "PackageFullName -eq "
+                "'OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__managed'",
+                verification_script,
+            )
