@@ -29,7 +29,7 @@ from sync_codex_models import (
 
 
 RESERVED_PROVIDER_IDS = {"openai", "ollama", "lmstudio", "9router"}
-PROVIDER_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_-]*$")
+PROVIDER_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 WIRE_APIS = {"responses", "chat"}
 AUTH_METHODS = {"keychain", "credential-manager", "none"}
 
@@ -54,7 +54,7 @@ def validate_provider_id(value: str) -> str:
         or provider_id in RESERVED_PROVIDER_IDS
     ):
         raise SetupError(
-            "Provider ID must be lowercase, start with a letter, and not be reserved"
+            "Provider ID must use lowercase letters, numbers, underscores, or hyphens and not be reserved"
         )
     return provider_id
 

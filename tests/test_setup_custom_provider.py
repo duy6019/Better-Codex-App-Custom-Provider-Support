@@ -14,6 +14,10 @@ class ProviderValidationTests(unittest.TestCase):
         self.assertEqual(setup.validate_provider_id("acme-router"), "acme-router")
         self.assertEqual(setup.keychain_service("acme-router"), "codex-acme-router")
 
+    def test_validate_provider_id_accepts_identifiers_starting_with_a_number(self):
+        self.assertEqual(setup.validate_provider_id("1router"), "1router")
+        self.assertEqual(setup.validate_provider_id("123"), "123")
+
     def test_validate_provider_id_rejects_reserved_or_invalid_identifiers(self):
         for value in ("openai", "9router", "Acme", "has space"):
             with self.subTest(value=value):
