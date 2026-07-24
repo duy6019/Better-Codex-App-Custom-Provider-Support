@@ -1616,22 +1616,66 @@ def _windows_store_full_name(paths: WindowsPatchPaths) -> str:
     return str(_windows_default_metadata(paths)["store_package_full_name"])
 
 
-def _windows_active_custom_full_name(
+def _windows_active_identity(
     metadata: dict[str, Any], custom_name: str
-) -> str:
-    """Return the immutable registration selector for an active artifact."""
+) -> tuple[str, str, str, str]:
+    """Return validated immutable registration selectors for an active artifact."""
 
     package_full_name = metadata.get("custom_package_full_name")
-    if not isinstance(package_full_name, str):
+    if not isinstance(package_full_name, str) or not package_full_name.strip():
         raise PatchError(
             "Windows active package metadata omitted a valid PackageFullName"
         )
     package_full_name = package_full_name.strip()
-    if not package_full_name or package_full_name == custom_name:
+    full_name_prefix = f"{custom_name}_"
+    if not package_full_name.startswith(full_name_prefix):
         raise PatchError(
             "Windows active package metadata omitted a valid PackageFullName"
         )
-    return package_full_name
+    full_name_parts = package_full_name[len(full_name_prefix):].split("_")
+    if (
+        len(full_name_parts) != 4
+        or full_name_parts[1].lower()
+        not in {"x86", "x64", "arm", "arm64", "neutral"}
+        or re.fullmatch(r"[A-Za-z0-9.-]*", full_name_parts[2]) is None
+        or re.fullmatch(
+            r"[0-9a-hj-km-np-tv-z]{13}", full_name_parts[3]
+        ) is None
+    ):
+        raise PatchError(
+            "Windows active package metadata omitted a valid PackageFullName"
+        )
+    fields = {
+        "PackageFamilyName": metadata.get("custom_package_family_name"),
+        "Publisher": metadata.get("custom_package_publisher"),
+        "source version": metadata.get("source_version"),
+    }
+    for label, value in fields.items():
+        if not isinstance(value, str) or not value.strip():
+            raise PatchError(
+                f"Windows active package metadata omitted a valid {label}"
+            )
+    package_family_name = str(fields["PackageFamilyName"]).strip()
+    publisher = str(fields["Publisher"]).strip()
+    source_version = str(fields["source version"]).strip()
+    version_parts = source_version.split(".")
+    if (
+        len(version_parts) != 4
+        or any(re.fullmatch(r"[0-9]+", part) is None for part in version_parts)
+        or any(int(part) > 65535 for part in version_parts)
+    ):
+        raise PatchError(
+            "Windows active package metadata omitted a valid source version"
+        )
+    if full_name_parts[0] != source_version:
+        raise PatchError(
+            "Windows active package metadata omitted a valid PackageFullName"
+        )
+    if package_family_name != f"{custom_name}_{full_name_parts[3]}":
+        raise PatchError(
+            "Windows active package metadata omitted a valid PackageFamilyName"
+        )
+    return package_full_name, package_family_name, publisher, source_version
 
 
 def _windows_candidate_identity(candidate_msix: Path, custom_name: str) -> dict[str, str]:
@@ -1767,6 +1811,10 @@ def _windows_add_script(
                 expected_publisher=expected_publisher,
                 expected_version=expected_version,
             )
+        )
+        lines.append(
+            "if ($packages.Count -ne 1) { "
+            "throw 'Unexpected additional custom package registration' }"
         )
     if not allow_running:
         lines.extend(
@@ -2214,11 +2262,6 @@ def _recover_windows_deployment(
             failures.append(f"inspect previous package: {exc}")
         if previous_msix is not None:
             try:
-                rollback_full_name = str(
-                    previous_metadata.get("custom_package_full_name") or ""
-                )
-                if rollback_full_name == custom_name:
-                    rollback_full_name = ""
                 _run_windows_package_command(
                     command_runner,
                     _windows_powershell_command(
@@ -2226,17 +2269,7 @@ def _recover_windows_deployment(
                             previous_msix,
                             custom_name,
                             allow_running=True,
-                            allow_existing=True,
-                            expected_full_name=rollback_full_name,
-                            expected_family_name=str(
-                                previous_metadata.get("custom_package_family_name") or ""
-                            ),
-                            expected_publisher=str(
-                                previous_metadata.get("custom_package_publisher") or ""
-                            ),
-                            expected_version=str(
-                                previous_metadata.get("source_version") or ""
-                            ),
+                            allow_existing=False,
                         )
                     ),
                 )
@@ -2319,22 +2352,23 @@ def deploy_windows_msix(
     if had_previous:
         previous_metadata = _windows_metadata(paths.active)
         expected_metadata.update(previous_metadata)
-        pre_add_full_name = _windows_active_custom_full_name(
+        (
+            pre_add_full_name,
+            pre_add_family_name,
+            pre_add_publisher,
+            pre_add_version,
+        ) = _windows_active_identity(
             previous_metadata, custom_name
         )
     else:
         expected_metadata["custom_package_name"] = custom_name
         pre_add_full_name = ""
+        pre_add_family_name = ""
+        pre_add_publisher = ""
+        pre_add_version = ""
     # Add-AppxPackage process shutdown and existing-package checks remain bound
     # to the immutable active identity.  Verification after registration must
     # instead use the candidate manifest's identity/version.
-    pre_add_family_name = str(
-        previous_metadata.get("custom_package_family_name") or ""
-    )
-    pre_add_publisher = str(
-        previous_metadata.get("custom_package_publisher") or ""
-    )
-    pre_add_version = str(previous_metadata.get("source_version") or "")
     candidate_name = str(candidate_identity.get("custom_package_name") or custom_name)
     candidate_publisher = str(
         candidate_identity.get("custom_package_publisher") or ""
@@ -2443,7 +2477,18 @@ def deploy_windows_msix(
             _remove_windows_path(paths.previous)
         return paths.active
     except Exception as exc:
-        if not registration_attempted and not snapshot_created:
+        if not registration_attempted:
+            if snapshot_created:
+                try:
+                    _remove_windows_path(paths.previous)
+                except Exception as cleanup_exc:
+                    previous_location = paths.previous.resolve()
+                    raise PatchError(
+                        f"{exc}\nWindows deployment recovery failed: "
+                        f"remove unused previous snapshot: {cleanup_exc}\n"
+                        f"The previous Windows package snapshot remains at: "
+                        f"{previous_location}"
+                    ) from exc
             raise
         recovery_failures = _recover_windows_deployment(
             paths,

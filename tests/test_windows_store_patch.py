@@ -253,8 +253,10 @@ class WindowsRollbackTests(unittest.TestCase):
         return json.dumps(
             {
                 "Name": "OpenAI.ChatGPT.CodexPatch",
-                "PackageFullName": f"OpenAI.ChatGPT.CodexPatch_{version}_x64__local",
-                "PackageFamilyName": "OpenAI.ChatGPT.CodexPatch_local",
+                "PackageFullName": (
+                    f"OpenAI.ChatGPT.CodexPatch_{version}_x64__8wekyb3d8bbwe"
+                ),
+                "PackageFamilyName": "OpenAI.ChatGPT.CodexPatch_8wekyb3d8bbwe",
                 "Publisher": "CN=Codex Provider Patch",
                 "Version": version,
                 "InstallLocation": str(install),
@@ -417,8 +419,13 @@ class WindowsRollbackTests(unittest.TestCase):
                     {
                         "custom_package_name": "OpenAI.ChatGPT.CodexPatch",
                         "custom_package_full_name": (
-                            "OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__local"
+                            "OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__8wekyb3d8bbwe"
                         ),
+                        "custom_package_family_name": (
+                            "OpenAI.ChatGPT.CodexPatch_8wekyb3d8bbwe"
+                        ),
+                        "custom_package_publisher": "CN=Codex Provider Patch",
+                        "source_version": "1.2.3.4",
                     }
                 ),
                 encoding="utf-8",
@@ -451,8 +458,13 @@ class WindowsRollbackTests(unittest.TestCase):
                     {
                         "custom_package_name": "OpenAI.ChatGPT.CodexPatch",
                         "custom_package_full_name": (
-                            "OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__local"
+                            "OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__8wekyb3d8bbwe"
                         ),
+                        "custom_package_family_name": (
+                            "OpenAI.ChatGPT.CodexPatch_8wekyb3d8bbwe"
+                        ),
+                        "custom_package_publisher": "CN=Codex Provider Patch",
+                        "source_version": "1.2.3.4",
                     }
                 ),
                 encoding="utf-8",
@@ -488,8 +500,13 @@ class WindowsRollbackTests(unittest.TestCase):
                     {
                         "custom_package_name": "OpenAI.ChatGPT.CodexPatch",
                         "custom_package_full_name": (
-                            "OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__local"
+                            "OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__8wekyb3d8bbwe"
                         ),
+                        "custom_package_family_name": (
+                            "OpenAI.ChatGPT.CodexPatch_8wekyb3d8bbwe"
+                        ),
+                        "custom_package_publisher": "CN=Codex Provider Patch",
+                        "source_version": "1.2.3.4",
                     }
                 ),
                 encoding="utf-8",
@@ -526,8 +543,12 @@ class WindowsRollbackTests(unittest.TestCase):
             payload = json.dumps(
                 {
                     "Name": "OpenAI.ChatGPT.CodexPatch",
-                    "PackageFullName": "OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__local",
-                    "PackageFamilyName": "OpenAI.ChatGPT.CodexPatch_local",
+                    "PackageFullName": (
+                        "OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__8wekyb3d8bbwe"
+                    ),
+                    "PackageFamilyName": (
+                        "OpenAI.ChatGPT.CodexPatch_8wekyb3d8bbwe"
+                    ),
                     "Publisher": "CN=Codex Provider Patch",
                     "Version": "1.2.3.4",
                     "InstallLocation": str(install),
@@ -612,8 +633,13 @@ class WindowsRollbackTests(unittest.TestCase):
                     {
                         "custom_package_name": "OpenAI.ChatGPT.CodexPatch",
                         "custom_package_full_name": (
-                            "OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__local"
+                            "OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__8wekyb3d8bbwe"
                         ),
+                        "custom_package_family_name": (
+                            "OpenAI.ChatGPT.CodexPatch_8wekyb3d8bbwe"
+                        ),
+                        "custom_package_publisher": "CN=Codex Provider Patch",
+                        "source_version": "1.2.3.4",
                     }
                 ),
                 encoding="utf-8",
@@ -628,8 +654,10 @@ class WindowsRollbackTests(unittest.TestCase):
             payload = json.dumps(
                 {
                     "Name": "OpenAI.ChatGPT.CodexPatch",
-                    "PackageFullName": "custom-full-name",
-                    "PackageFamilyName": "custom-family",
+                    "PackageFullName": (
+                        "OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__8wekyb3d8bbwe"
+                    ),
+                    "PackageFamilyName": "OpenAI.ChatGPT.CodexPatch_8wekyb3d8bbwe",
                     "Publisher": "CN=Codex Provider Patch",
                     "Version": "1.2.3.4",
                     "InstallLocation": str(installed),
@@ -661,6 +689,228 @@ class WindowsRollbackTests(unittest.TestCase):
             )
             self.assertFalse(paths.previous.exists())
 
+    def test_recovery_add_requires_empty_custom_registration_not_removed_previous(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = patcher.windows_patch_paths(root)
+            old_full_name = (
+                "OpenAI.ChatGPT.CodexPatch_1.0.0.0_x64__8wekyb3d8bbwe"
+            )
+            old_family_name = "OpenAI.ChatGPT.CodexPatch_8wekyb3d8bbwe"
+            paths.active.mkdir(parents=True)
+            previous_msix = paths.active / "previous.msix"
+            previous_msix.write_bytes(b"previous")
+            (paths.active / "package.json").write_text(
+                json.dumps(
+                    {
+                        "custom_package_name": "OpenAI.ChatGPT.CodexPatch",
+                        "custom_package_full_name": old_full_name,
+                        "custom_package_family_name": old_family_name,
+                        "custom_package_publisher": "CN=Previous",
+                        "source_version": "1.0.0.0",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            candidate = root / "candidate.msix"
+            with zipfile.ZipFile(candidate, "w") as package:
+                package.writestr(
+                    "AppxManifest.xml",
+                    '<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">'
+                    '<Identity Name="OpenAI.ChatGPT.CodexPatch" '
+                    'Publisher="CN=Candidate" Version="2.0.0.0" />'
+                    "</Package>",
+                )
+            candidate_full_name = (
+                "OpenAI.ChatGPT.CodexPatch_2.0.0.0_x64__candidate"
+            )
+            candidate_family_name = "OpenAI.ChatGPT.CodexPatch_candidate"
+            old_install = root / "installed-previous"
+            candidate_install = root / "installed-candidate"
+            for install in (old_install, candidate_install):
+                (install / "resources").mkdir(parents=True)
+                (install / "resources" / "app.asar").write_bytes(
+                    patcher.PATCH_MARKER
+                )
+            registrations = {old_full_name}
+            add_scripts = []
+
+            def payload(
+                full_name, family_name, publisher, version, install_location
+            ):
+                return json.dumps(
+                    {
+                        "Name": "OpenAI.ChatGPT.CodexPatch",
+                        "PackageFullName": full_name,
+                        "PackageFamilyName": family_name,
+                        "Publisher": publisher,
+                        "Version": version,
+                        "InstallLocation": str(install_location),
+                    }
+                )
+
+            def runner(command):
+                script = command[-1]
+                if "Select-Object -ExpandProperty PackageFullName" in script:
+                    matching = (
+                        [candidate_full_name]
+                        if candidate_full_name in registrations
+                        else []
+                    )
+                    return completed(command, json.dumps(matching))
+                if "Remove-AppxPackage" in script:
+                    self.assertIn(candidate_full_name, script)
+                    registrations.discard(candidate_full_name)
+                    return completed(command)
+                if "Add-AppxPackage" in script:
+                    add_scripts.append(script)
+                    is_rollback = "previous.msix" in script
+                    if "$customMatches.Count -ne 1" in script:
+                        required = old_full_name if is_rollback else old_full_name
+                        if required not in registrations:
+                            raise patcher.PatchError(
+                                "PowerShell exact-existing precondition failed"
+                            )
+                    if "$existing.Count -ne 0" in script and registrations:
+                        raise patcher.PatchError(
+                            "PowerShell empty-registration precondition failed"
+                        )
+                    if is_rollback:
+                        registrations.add(old_full_name)
+                        return completed(command)
+                    registrations.discard(old_full_name)
+                    registrations.add(candidate_full_name)
+                    raise patcher.PatchError("deployment failed")
+                if "ConvertTo-Json" in script:
+                    if "Version.ToString() -eq '2.0.0.0'" in script:
+                        if candidate_full_name not in registrations:
+                            raise patcher.PatchError("candidate is not registered")
+                        return completed(
+                            command,
+                            payload(
+                                candidate_full_name,
+                                candidate_family_name,
+                                "CN=Candidate",
+                                "2.0.0.0",
+                                candidate_install,
+                            ),
+                        )
+                    if old_full_name not in registrations:
+                        raise patcher.PatchError("previous is not registered")
+                    return completed(
+                        command,
+                        payload(
+                            old_full_name,
+                            old_family_name,
+                            "CN=Previous",
+                            "1.0.0.0",
+                            old_install,
+                        ),
+                    )
+                return completed(command)
+
+            with self.assertRaisesRegex(patcher.PatchError, "^deployment failed$"):
+                patcher.deploy_windows_msix(
+                    candidate,
+                    paths,
+                    command_runner=runner,
+                )
+
+            rollback_script = next(
+                script for script in add_scripts if "previous.msix" in script
+            )
+            self.assertIn("$existing.Count -ne 0", rollback_script)
+            self.assertNotIn("$customMatches.Count -ne 1", rollback_script)
+            self.assertEqual(registrations, {old_full_name})
+            self.assertFalse(paths.previous.exists())
+
+    def test_recovery_add_fails_when_candidate_removal_is_a_noop(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = patcher.windows_patch_paths(root)
+            previous_full_name = (
+                "OpenAI.ChatGPT.CodexPatch_1.0.0.0_x64__8wekyb3d8bbwe"
+            )
+            candidate_full_name = (
+                "OpenAI.ChatGPT.CodexPatch_2.0.0.0_x64__8wekyb3d8bbwe"
+            )
+            family_name = "OpenAI.ChatGPT.CodexPatch_8wekyb3d8bbwe"
+            paths.active.mkdir(parents=True)
+            (paths.active / "previous.msix").write_bytes(b"previous")
+            (paths.active / "package.json").write_text(
+                json.dumps(
+                    {
+                        "custom_package_name": "OpenAI.ChatGPT.CodexPatch",
+                        "custom_package_full_name": previous_full_name,
+                        "custom_package_family_name": family_name,
+                        "custom_package_publisher": "CN=Previous",
+                        "source_version": "1.0.0.0",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            candidate = root / "candidate.msix"
+            candidate.write_bytes(b"candidate")
+            installed = root / "installed-candidate"
+            (installed / "resources").mkdir(parents=True)
+            (installed / "resources" / "app.asar").write_bytes(
+                patcher.PATCH_MARKER
+            )
+            candidate_payload = json.dumps(
+                {
+                    "Name": "OpenAI.ChatGPT.CodexPatch",
+                    "PackageFullName": candidate_full_name,
+                    "PackageFamilyName": family_name,
+                    "Publisher": "CN=Previous",
+                    "Version": "1.0.0.0",
+                    "InstallLocation": str(installed),
+                }
+            )
+            registrations = {previous_full_name}
+            rollback_scripts = []
+
+            def runner(command):
+                script = command[-1]
+                if "Select-Object -ExpandProperty PackageFullName" in script:
+                    return completed(command, "[]")
+                if "Remove-AppxPackage" in script:
+                    self.assertIn(candidate_full_name, script)
+                    return completed(command)
+                if "Add-AppxPackage" in script:
+                    if "previous.msix" in script:
+                        rollback_scripts.append(script)
+                        if "$existing.Count -ne 0" in script and registrations:
+                            raise patcher.PatchError(
+                                "PowerShell empty-registration precondition failed"
+                            )
+                        return completed(command)
+                    registrations.discard(previous_full_name)
+                    registrations.add(candidate_full_name)
+                    return completed(command)
+                if "ConvertTo-Json" in script:
+                    return completed(command, candidate_payload)
+                return completed(command)
+
+            with mock.patch.object(
+                patcher,
+                "promote_windows_active",
+                side_effect=patcher.PatchError("promotion failed"),
+            ):
+                with self.assertRaisesRegex(
+                    patcher.PatchError,
+                    re.escape(str(paths.previous.resolve())),
+                ):
+                    patcher.deploy_windows_msix(
+                        candidate,
+                        paths,
+                        command_runner=runner,
+                    )
+
+            self.assertEqual(registrations, {candidate_full_name})
+            self.assertEqual(len(rollback_scripts), 1)
+            self.assertIn("$existing.Count -ne 0", rollback_scripts[0])
+            self.assertTrue(paths.previous.exists())
+
     def test_recovery_verifies_against_previous_not_new_store_version(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -681,7 +931,12 @@ class WindowsRollbackTests(unittest.TestCase):
                 json.dumps(
                     {
                         "custom_package_name": "OpenAI.ChatGPT.CodexPatch",
-                        "custom_package_full_name": "previous-full-name",
+                        "custom_package_full_name": (
+                            "OpenAI.ChatGPT.CodexPatch_1.0.0.0_x64__8wekyb3d8bbwe"
+                        ),
+                        "custom_package_family_name": (
+                            "OpenAI.ChatGPT.CodexPatch_8wekyb3d8bbwe"
+                        ),
                         "custom_package_publisher": "CN=Codex Provider Patch",
                         "source_version": "1.0.0.0",
                     }
@@ -851,12 +1106,14 @@ class WindowsRollbackTests(unittest.TestCase):
             install = root / "installed-custom"
             (install / "resources").mkdir(parents=True)
             (install / "resources" / "app.asar").write_bytes(b"unmarked")
-            package_full_name = "OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__local"
+            package_full_name = (
+                "OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__8wekyb3d8bbwe"
+            )
             payload = json.dumps(
                 {
                     "Name": "OpenAI.ChatGPT.CodexPatch",
                     "PackageFullName": package_full_name,
-                    "PackageFamilyName": "OpenAI.ChatGPT.CodexPatch_local",
+                    "PackageFamilyName": "OpenAI.ChatGPT.CodexPatch_8wekyb3d8bbwe",
                     "Publisher": "CN=Codex Provider Patch",
                     "Version": "1.2.3.4",
                     "InstallLocation": str(install),
@@ -912,6 +1169,75 @@ class WindowsRollbackTests(unittest.TestCase):
             self.assertTrue((paths.previous / "recovery-evidence").exists())
             self.assertFalse(paths.active.exists())
 
+    def test_pre_add_registration_snapshot_failure_discards_new_snapshot(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = patcher.windows_patch_paths(root)
+            paths.active.mkdir(parents=True)
+            (paths.active / "previous.msix").write_bytes(b"previous")
+            (paths.active / "package.json").write_text(
+                json.dumps(
+                    {
+                        "custom_package_name": "OpenAI.ChatGPT.CodexPatch",
+                        "custom_package_full_name": (
+                            "OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__8wekyb3d8bbwe"
+                        ),
+                        "custom_package_family_name": (
+                            "OpenAI.ChatGPT.CodexPatch_8wekyb3d8bbwe"
+                        ),
+                        "custom_package_publisher": "CN=Codex Provider Patch",
+                        "source_version": "1.2.3.4",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            candidate = root / "candidate.msix"
+            candidate.write_bytes(b"candidate")
+            calls = []
+
+            def runner(command):
+                calls.append(command)
+                raise patcher.PatchError("candidate snapshot failed")
+
+            with self.assertRaisesRegex(
+                patcher.PatchError, "^candidate snapshot failed$"
+            ):
+                patcher.deploy_windows_msix(
+                    candidate,
+                    paths,
+                    command_runner=runner,
+                )
+
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(
+                (paths.active / "previous.msix").read_bytes(), b"previous"
+            )
+            self.assertFalse(paths.previous.exists())
+
+    def test_update_add_requires_the_known_registration_to_be_the_only_one(self):
+        script = patcher._windows_add_script(
+            Path("candidate.msix"),
+            "OpenAI.ChatGPT.CodexPatch",
+            allow_running=False,
+            allow_existing=True,
+            expected_full_name=(
+                "OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__8wekyb3d8bbwe"
+            ),
+            expected_family_name="OpenAI.ChatGPT.CodexPatch_8wekyb3d8bbwe",
+            expected_publisher="CN=Codex Provider Patch",
+            expected_version="1.2.3.4",
+        )
+
+        self.assertIn("$packages.Count -ne 1", script)
+        self.assertLess(
+            script.index("$packages.Count -ne 1"),
+            script.index("ExecutablePath.StartsWith"),
+        )
+        self.assertLess(
+            script.index("$packages.Count -ne 1"),
+            script.index("Add-AppxPackage"),
+        )
+
     def test_update_binds_process_and_verification_to_active_custom_identity(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -923,10 +1249,10 @@ class WindowsRollbackTests(unittest.TestCase):
                     {
                         "custom_package_name": "OpenAI.ChatGPT.CodexPatch",
                         "custom_package_full_name": (
-                            "OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__managed"
+                            "OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__8wekyb3d8bbwe"
                         ),
                         "custom_package_family_name": (
-                            "OpenAI.ChatGPT.CodexPatch_managed"
+                            "OpenAI.ChatGPT.CodexPatch_8wekyb3d8bbwe"
                         ),
                         "custom_package_publisher": "CN=Codex Provider Patch",
                         "source_version": "1.2.3.4",
@@ -943,9 +1269,9 @@ class WindowsRollbackTests(unittest.TestCase):
                 {
                     "Name": "OpenAI.ChatGPT.CodexPatch",
                     "PackageFullName": (
-                        "OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__managed"
+                        "OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__8wekyb3d8bbwe"
                     ),
-                    "PackageFamilyName": "OpenAI.ChatGPT.CodexPatch_managed",
+                    "PackageFamilyName": "OpenAI.ChatGPT.CodexPatch_8wekyb3d8bbwe",
                     "Publisher": "CN=Codex Provider Patch",
                     "Version": "1.2.3.4",
                     "InstallLocation": str(install),
@@ -976,13 +1302,13 @@ class WindowsRollbackTests(unittest.TestCase):
             self.assertNotIn("Select-Object -First 1", install_script)
             self.assertIn(
                 "PackageFullName -eq "
-                "'OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__managed'",
+                "'OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__8wekyb3d8bbwe'",
                 install_script,
             )
             self.assertNotIn("Select-Object -First 1", verification_script)
             self.assertIn(
                 "PackageFullName -eq "
-                "'OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__managed'",
+                "'OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__8wekyb3d8bbwe'",
                 verification_script,
             )
 
@@ -1008,10 +1334,10 @@ class WindowsRollbackTests(unittest.TestCase):
                     {
                         "custom_package_name": "OpenAI.ChatGPT.CodexPatch",
                         "custom_package_full_name": (
-                            "OpenAI.ChatGPT.CodexPatch_1.0.0.0_x64__managed"
+                            "OpenAI.ChatGPT.CodexPatch_1.0.0.0_x64__8wekyb3d8bbwe"
                         ),
                         "custom_package_family_name": (
-                            "OpenAI.ChatGPT.CodexPatch_managed"
+                            "OpenAI.ChatGPT.CodexPatch_8wekyb3d8bbwe"
                         ),
                         "custom_package_publisher": "CN=Old Patch",
                         "source_version": "1.0.0.0",
@@ -1064,7 +1390,7 @@ class WindowsRollbackTests(unittest.TestCase):
             )
             self.assertIn(
                 "PackageFullName -eq "
-                "'OpenAI.ChatGPT.CodexPatch_1.0.0.0_x64__managed'",
+                "'OpenAI.ChatGPT.CodexPatch_1.0.0.0_x64__8wekyb3d8bbwe'",
                 add_script,
             )
             self.assertIn("Version.ToString() -eq '2.0.0.0'", query_script)
@@ -1310,3 +1636,82 @@ class WindowsRollbackTests(unittest.TestCase):
             self.assertEqual(calls, [])
             self.assertTrue((paths.active / "previous.msix").exists())
             self.assertFalse(paths.previous.exists())
+
+    def test_upgrade_rejects_truncated_active_package_full_name_before_commands(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = patcher.windows_patch_paths(root)
+            paths.active.mkdir(parents=True)
+            (paths.active / "previous.msix").write_bytes(b"previous")
+            (paths.active / "package.json").write_text(
+                json.dumps(
+                    {
+                        "custom_package_name": "OpenAI.ChatGPT.CodexPatch",
+                        "custom_package_full_name": (
+                            "OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__8wekyb3d8bbw"
+                        ),
+                        "custom_package_family_name": (
+                            "OpenAI.ChatGPT.CodexPatch_8wekyb3d8bbw"
+                        ),
+                        "custom_package_publisher": "CN=Codex Provider Patch",
+                        "source_version": "1.2.3.4",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            candidate = root / "candidate.msix"
+            candidate.write_bytes(b"candidate")
+            calls = []
+
+            with self.assertRaisesRegex(patcher.PatchError, "PackageFullName"):
+                patcher.deploy_windows_msix(
+                    candidate,
+                    paths,
+                    command_runner=lambda command: calls.append(command)
+                    or completed(command),
+                )
+
+            self.assertEqual(calls, [])
+            self.assertTrue((paths.active / "previous.msix").exists())
+            self.assertFalse(paths.previous.exists())
+
+    def test_upgrade_rejects_missing_active_identity_selectors_before_commands(self):
+        required = {
+            "custom_package_full_name": (
+                "OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__8wekyb3d8bbwe"
+            ),
+            "custom_package_family_name": "OpenAI.ChatGPT.CodexPatch_8wekyb3d8bbwe",
+            "custom_package_publisher": "CN=Codex Provider Patch",
+            "source_version": "1.2.3.4",
+        }
+        for missing_field in required:
+            with self.subTest(missing_field=missing_field):
+                with tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary)
+                    paths = patcher.windows_patch_paths(root)
+                    paths.active.mkdir(parents=True)
+                    (paths.active / "previous.msix").write_bytes(b"previous")
+                    metadata = {
+                        "custom_package_name": "OpenAI.ChatGPT.CodexPatch",
+                        **required,
+                    }
+                    metadata.pop(missing_field)
+                    (paths.active / "package.json").write_text(
+                        json.dumps(metadata),
+                        encoding="utf-8",
+                    )
+                    candidate = root / "candidate.msix"
+                    candidate.write_bytes(b"candidate")
+                    calls = []
+
+                    with self.assertRaises(patcher.PatchError):
+                        patcher.deploy_windows_msix(
+                            candidate,
+                            paths,
+                            command_runner=lambda command: calls.append(command)
+                            or completed(command),
+                        )
+
+                    self.assertEqual(calls, [])
+                    self.assertTrue((paths.active / "previous.msix").exists())
+                    self.assertFalse(paths.previous.exists())
