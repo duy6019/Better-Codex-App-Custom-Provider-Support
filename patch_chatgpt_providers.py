@@ -30,6 +30,7 @@ import tempfile
 import textwrap
 import time
 from typing import Any, NoReturn, Sequence
+import xml.etree.ElementTree as ET
 
 
 PATCH_MARKER = b"__codexDesktopModelProvidersPatchV2"
@@ -805,6 +806,19 @@ class WindowsToolPaths:
 
 
 @dataclasses.dataclass(frozen=True)
+class WindowsPackageIdentity:
+    name: str
+    publisher: str
+    version: str
+
+
+@dataclasses.dataclass(frozen=True)
+class WindowsSigningCertificate:
+    subject: str
+    thumbprint: str
+
+
+@dataclasses.dataclass(frozen=True)
 class WindowsPatchPaths:
     root: Path
     original: Path
@@ -905,6 +919,214 @@ def find_windows_sdk_tools(search_roots: Sequence[Path]) -> WindowsToolPaths:
     if missing_tool_error is not None:
         raise missing_tool_error
     raise PatchError("Windows SDK tools not found: MakeAppx.exe and SignTool.exe")
+
+
+def windows_package_identity(
+    store_package_name: str, version: str, publisher: str
+) -> WindowsPackageIdentity:
+    return WindowsPackageIdentity(
+        name=f"{store_package_name}.CodexPatch",
+        publisher=publisher,
+        version=version,
+    )
+
+
+def windows_signing_certificate(command_runner: Any) -> WindowsSigningCertificate:
+    script = textwrap.dedent(
+        """\
+        $ErrorActionPreference = 'Stop'
+        $subject = 'CN=Codex Provider Patch'
+        $codeSigningOid = '1.3.6.1.5.5.7.3.3'
+        $certificate = Get-ChildItem -Path Cert:\\CurrentUser\\My |
+            Where-Object {
+                $_.Subject -eq $subject -and $_.HasPrivateKey -and
+                $_.EnhancedKeyUsageList.ObjectId -contains $codeSigningOid
+            } |
+            Select-Object -First 1
+        if ($null -eq $certificate) {
+            $certificate = New-SelfSignedCertificate -Type CodeSigningCert `
+                -Subject $subject -CertStoreLocation Cert:\\CurrentUser\\My
+        }
+        $trusted = Get-ChildItem -Path Cert:\\LocalMachine\\TrustedPeople |
+            Where-Object { $_.Thumbprint -eq $certificate.Thumbprint } |
+            Select-Object -First 1
+        if ($null -eq $trusted) {
+            $publicCertificate = Join-Path ([System.IO.Path]::GetTempPath()) `
+                ("CodexProviderPatch-" + [System.Guid]::NewGuid().ToString() + ".cer")
+            try {
+                Export-Certificate -Cert $certificate -FilePath $publicCertificate |
+                    Out-Null
+                Import-Certificate -FilePath $publicCertificate `
+                    -CertStoreLocation Cert:\\LocalMachine\\TrustedPeople | Out-Null
+            }
+            finally {
+                Remove-Item -LiteralPath $publicCertificate -Force -ErrorAction SilentlyContinue
+            }
+        }
+        [pscustomobject]@{
+            Subject = $certificate.Subject
+            Thumbprint = $certificate.Thumbprint
+        } | ConvertTo-Json -Compress
+        """
+    )
+    command = [
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        script,
+    ]
+    try:
+        result = command_runner(command)
+        payload = json.loads(result.stdout.strip())
+    except Exception as exc:
+        raise PatchError("Could not create or trust the Windows signing certificate") from exc
+
+    if not isinstance(payload, dict):
+        raise PatchError("Windows signing certificate command returned invalid JSON")
+    subject = payload.get("Subject")
+    thumbprint = payload.get("Thumbprint")
+    if not isinstance(subject, str) or not subject.strip():
+        raise PatchError("Windows signing certificate command omitted Subject")
+    if not isinstance(thumbprint, str) or not thumbprint.strip():
+        raise PatchError("Windows signing certificate command omitted Thumbprint")
+    return WindowsSigningCertificate(subject.strip(), thumbprint.strip())
+
+
+def rewrite_windows_manifest_identity(
+    contents: str, identity: WindowsPackageIdentity
+) -> str:
+    try:
+        root = ET.fromstring(contents)
+    except ET.ParseError as exc:
+        raise PatchError("Windows package manifest is malformed XML") from exc
+
+    identity_element = next(
+        (
+            element
+            for element in root
+            if element.tag.rsplit("}", 1)[-1] == "Identity"
+        ),
+        None,
+    )
+    if identity_element is None:
+        raise PatchError("Windows package manifest has no Identity element")
+    identity_element.set("Name", identity.name)
+    identity_element.set("Publisher", identity.publisher)
+    identity_element.set("Version", identity.version)
+
+    if root.tag.startswith("{"):
+        ET.register_namespace("", root.tag[1:].split("}", 1)[0])
+    return ET.tostring(root, encoding="unicode")
+
+
+def _run_windows_package_command(command_runner: Any, command: list[str]) -> None:
+    try:
+        result = command_runner(command)
+    except PatchError:
+        raise
+    except Exception as exc:
+        raise PatchError(f"Windows package command failed: {command[0]}") from exc
+    if getattr(result, "returncode", 0) != 0:
+        raise PatchError(f"Windows package command failed: {command[0]}")
+
+
+def update_windows_asar_integrity(layout: Path, asar_path: Path) -> None:
+    integrity_path = layout / "resources" / "asar-integrity.json"
+    if not integrity_path.is_file():
+        return
+    try:
+        integrity = json.loads(integrity_path.read_text(encoding="utf-8"))
+        asar_entry = integrity["resources/app.asar"]
+        if not isinstance(asar_entry, dict):
+            raise TypeError("ASAR entry is not an object")
+        asar_entry["hash"] = asar_header_hash(asar_path)
+    except (OSError, json.JSONDecodeError, KeyError, TypeError, PatchError) as exc:
+        raise PatchError("Windows ASAR integrity manifest is invalid") from exc
+    try:
+        integrity_path.write_text(
+            json.dumps(integrity, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        raise PatchError("Could not update Windows ASAR integrity manifest") from exc
+
+
+def build_windows_patched_msix(
+    package: WindowsStorePackage,
+    original_layout: Path,
+    work: Path,
+    tools: WindowsToolPaths,
+    certificate: WindowsSigningCertificate,
+    command_runner: Any,
+) -> Path:
+    source_asar = original_layout / "resources" / "app.asar"
+    if contains_marker(source_asar):
+        raise PatchError("The clean original Windows payload is already patched")
+
+    layout = work / "layout"
+    extracted = work / "app"
+    output = work / "ChatGPT-CodexPatch.msix"
+    try:
+        work.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(original_layout, layout)
+    except OSError as exc:
+        raise PatchError("Could not copy the clean Windows package layout") from exc
+
+    copied_asar = layout / "resources" / "app.asar"
+    _run_windows_package_command(
+        command_runner,
+        ["npx", "--yes", ASAR_PACKAGE, "extract", str(copied_asar), str(extracted)],
+    )
+    bundle = current_patch_bundle(extracted / "webview" / "assets")
+    patch_current_bundle(bundle)
+    _run_windows_package_command(
+        command_runner,
+        ["npx", "--yes", ASAR_PACKAGE, "pack", str(extracted), str(copied_asar)],
+    )
+    if not contains_marker(copied_asar):
+        raise PatchError("Packed Windows ASAR does not contain the patch marker")
+
+    update_windows_asar_integrity(layout, copied_asar)
+    manifest_path = layout / "AppxManifest.xml"
+    try:
+        manifest_path.write_text(
+            rewrite_windows_manifest_identity(
+                manifest_path.read_text(encoding="utf-8"),
+                windows_package_identity(
+                    package.name,
+                    package.version,
+                    certificate.subject,
+                ),
+            ),
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        raise PatchError("Could not rewrite the Windows package manifest") from exc
+
+    _run_windows_package_command(
+        command_runner,
+        [str(tools.makeappx), "pack", "/d", str(layout), "/p", str(output)],
+    )
+    _run_windows_package_command(
+        command_runner,
+        [
+            str(tools.signtool),
+            "sign",
+            "/fd",
+            "SHA256",
+            "/sha1",
+            certificate.thumbprint,
+            "/s",
+            "My",
+            str(output),
+        ],
+    )
+    _run_windows_package_command(
+        command_runner,
+        [str(tools.signtool), "verify", "/pa", "/v", str(output)],
+    )
+    return output
 
 
 def parse_args() -> argparse.Namespace:
