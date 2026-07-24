@@ -325,13 +325,13 @@ class CurrentBundleTests(unittest.TestCase):
         bundle.write_text("\n".join(markers), encoding="utf-8")
         return bundle
 
-    def test_current_patch_bundle_finds_build_5813_app_initial(self):
+    def test_current_patch_bundle_finds_build_5828_app_initial(self):
         with tempfile.TemporaryDirectory() as temporary:
             assets = Path(temporary)
             expected = self.write_bundle(
                 assets,
-                "app-initial-BTphDPeq.js",
-                patcher.BUILD_5813_BUNDLE_MARKERS,
+                "app-initial-C-fROkKo.js",
+                patcher.BUILD_5828_BUNDLE_MARKERS,
             )
             self.write_bundle(
                 assets,
@@ -341,29 +341,29 @@ class CurrentBundleTests(unittest.TestCase):
 
             self.assertEqual(patcher.current_patch_bundle(assets), expected)
 
-    def test_current_patch_bundle_rejects_missing_build_5813_layout(self):
+    def test_current_patch_bundle_rejects_missing_build_5828_layout(self):
         with tempfile.TemporaryDirectory() as temporary:
             assets = Path(temporary)
             self.write_bundle(
                 assets,
                 "app-initial-old.js",
-                patcher.BUILD_5813_BUNDLE_MARKERS[:-1],
+                patcher.BUILD_5828_BUNDLE_MARKERS[:-1],
             )
 
             with self.assertRaisesRegex(
                 patcher.PatchError,
-                "found 0 out of 1 filename matches",
+                "ChatGPT 26.721.31836 build 5828 application.*found 0 out of 1 filename matches",
             ):
                 patcher.current_patch_bundle(assets)
 
-    def test_current_patch_bundle_rejects_ambiguous_build_5813_layout(self):
+    def test_current_patch_bundle_rejects_ambiguous_build_5828_layout(self):
         with tempfile.TemporaryDirectory() as temporary:
             assets = Path(temporary)
             for suffix in ("one", "two"):
                 self.write_bundle(
                     assets,
                     f"app-initial-{suffix}.js",
-                    patcher.BUILD_5813_BUNDLE_MARKERS,
+                    patcher.BUILD_5828_BUNDLE_MARKERS,
                 )
 
             with self.assertRaisesRegex(
@@ -378,7 +378,7 @@ class CurrentBundleTests(unittest.TestCase):
             self.write_bundle(
                 assets,
                 "legacy-app-initial-unexpected.js",
-                patcher.BUILD_5813_BUNDLE_MARKERS,
+                patcher.BUILD_5828_BUNDLE_MARKERS,
             )
 
             with self.assertRaisesRegex(
@@ -386,6 +386,11 @@ class CurrentBundleTests(unittest.TestCase):
                 "found 0 out of 0 filename matches",
             ):
                 patcher.current_patch_bundle(assets)
+
+    def test_build_5828_markers_include_verified_minified_symbols(self):
+        self.assertIn("function p9t(e)", patcher.BUILD_5828_BUNDLE_MARKERS)
+        self.assertIn("function Qjs(e)", patcher.BUILD_5828_BUNDLE_MARKERS)
+        self.assertIn("async function rp(...e)", patcher.BUILD_5828_BUNDLE_MARKERS)
 
     def test_patch_current_bundle_applies_both_diffs_to_one_file(self):
         with tempfile.TemporaryDirectory() as temporary:

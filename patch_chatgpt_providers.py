@@ -31,12 +31,15 @@ from typing import Any, NoReturn
 PATCH_MARKER = b"__codexDesktopModelProvidersPatchV2"
 ASAR_PACKAGE = "@electron/asar@3.2.10"
 PRETTIER_PACKAGE = "prettier@3.6.2"
-BUILD_5813_BUNDLE_MARKERS = (
+BUILD_5828_BUNDLE_MARKERS = (
     "async prewarmThreadStart(",
     "async sendConfigReadRequest(",
     "composer.intelligenceDropdown.tooltip",
     "data-model-picker-model-row",
     "vertical-scroll-fade-mask flex max-h-[250px] flex-col overflow-y-auto",
+    "function p9t(e)",
+    "function Qjs(e)",
+    "async function rp(...e)",
 )
 
 DEFAULT_PROVIDER_CONFIG: dict[str, Any] = {
@@ -1103,8 +1106,8 @@ def current_patch_bundle(assets: Path) -> Path:
     return unique_candidate(
         assets,
         "app-initial-*.js",
-        BUILD_5813_BUNDLE_MARKERS,
-        "ChatGPT 26.721.30844 build 5813 application",
+        BUILD_5828_BUNDLE_MARKERS,
+        "ChatGPT 26.721.31836 build 5828 application",
     )
 
 
