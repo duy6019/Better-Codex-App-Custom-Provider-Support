@@ -1,10 +1,12 @@
 import hashlib
+import io
 import json
 from pathlib import Path
 import re
 import shutil
 import subprocess
 import tempfile
+import types
 import unittest
 from unittest import mock
 import zipfile
@@ -1792,3 +1794,81 @@ class WindowsRollbackTests(unittest.TestCase):
                     self.assertEqual(calls, [])
                     self.assertTrue((paths.active / "previous.msix").exists())
                     self.assertFalse(paths.previous.exists())
+
+
+class PlatformDispatchTests(unittest.TestCase):
+    def test_win32_dispatches_to_store_adapter_not_macos_bundle(self):
+        args = types.SimpleNamespace(
+            app=None,
+            config=Path("config.json"),
+            reapply_from=None,
+            overwrite_config=False,
+            allow_running=False,
+        )
+        with (
+            mock.patch.object(patcher, "parse_args", return_value=args),
+            mock.patch.object(patcher, "patch_windows_store_app") as windows,
+            mock.patch.object(patcher, "patch_macos_app") as macos,
+            mock.patch.object(patcher.sys, "platform", "win32"),
+            mock.patch.dict(patcher.os.environ, {"LOCALAPPDATA": "C:/Temp"}),
+        ):
+            self.assertEqual(patcher.main(), 0)
+
+        windows.assert_called_once()
+        macos.assert_not_called()
+
+    def test_darwin_retains_existing_bundle_adapter(self):
+        args = types.SimpleNamespace(
+            app=Path("/Applications/ChatGPT.app"),
+            config=Path("config.json"),
+            reapply_from=None,
+            overwrite_config=False,
+            allow_running=False,
+        )
+        with (
+            mock.patch.object(patcher, "parse_args", return_value=args),
+            mock.patch.object(patcher, "patch_windows_store_app") as windows,
+            mock.patch.object(patcher, "patch_macos_app") as macos,
+            mock.patch.object(patcher.sys, "platform", "darwin"),
+        ):
+            self.assertEqual(patcher.main(), 0)
+
+        macos.assert_called_once_with(args)
+        windows.assert_not_called()
+
+    def test_win32_rejects_macos_only_path_arguments(self):
+        args = types.SimpleNamespace(
+            app=Path("C:/ChatGPT.app"),
+            config=Path("config.json"),
+            reapply_from=None,
+            overwrite_config=False,
+            allow_running=False,
+        )
+        with (
+            mock.patch.object(patcher, "parse_args", return_value=args),
+            mock.patch.object(patcher, "patch_windows_store_app") as windows,
+            mock.patch.object(patcher, "patch_macos_app") as macos,
+            mock.patch.object(patcher, "fail") as fail,
+            mock.patch.object(patcher.sys, "platform", "win32"),
+        ):
+            self.assertEqual(patcher.main(), 0)
+
+        fail.assert_called_once()
+        self.assertIn("macOS", fail.call_args.args[0])
+        windows.assert_not_called()
+        macos.assert_not_called()
+
+    def test_windows_help_explains_store_sdk_and_no_developer_mode(self):
+        stdout = io.StringIO()
+        with (
+            mock.patch.object(patcher.sys, "platform", "win32"),
+            mock.patch.object(patcher.sys, "argv", ["patcher", "--help"]),
+            mock.patch("sys.stdout", stdout),
+            self.assertRaises(SystemExit),
+        ):
+            patcher.parse_args()
+
+        help_text = stdout.getvalue()
+        self.assertIn("Microsoft Store", help_text)
+        self.assertIn("Windows SDK", help_text)
+        self.assertIn("Developer Mode is not required", help_text)

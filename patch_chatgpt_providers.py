@@ -1136,17 +1136,26 @@ def build_windows_patched_msix(
 
 def parse_args() -> argparse.Namespace:
     codex_home = effective_codex_home()
+    is_windows = sys.platform == "win32"
+    description = (
+        "Add an explicit provider selector to the Windows Microsoft Store ChatGPT app. "
+        "Windows SDK tools are required; Developer Mode is not required."
+        if is_windows
+        else "Add an explicit provider selector to the macOS ChatGPT/Codex desktop app. "
+        "Supports ChatGPT 26.721.31836 build 5828."
+    )
     parser = FancyArgumentParser(
-        description=(
-            "Add an explicit provider selector to the macOS ChatGPT/Codex desktop app. "
-            "Supports ChatGPT 26.721.31836 build 5828."
-        )
+        description=description
     )
     parser.add_argument(
         "--app",
         type=Path,
-        default=Path("/Applications/ChatGPT.app"),
-        help="ChatGPT.app to patch (default: /Applications/ChatGPT.app)",
+        default=None if is_windows else Path("/Applications/ChatGPT.app"),
+        help=(
+            "macOS ChatGPT.app to patch (unsupported on Windows)"
+            if is_windows
+            else "ChatGPT.app to patch (default: /Applications/ChatGPT.app)"
+        ),
     )
     parser.add_argument(
         "--config",
@@ -1157,7 +1166,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--reapply-from",
         type=Path,
-        help="Seed the sibling original from this matching clean app backup",
+        help=(
+            "macOS only: seed the sibling original from a matching clean app backup"
+            if is_windows
+            else "Seed the sibling original from this matching clean app backup"
+        ),
     )
     parser.add_argument(
         "--overwrite-config",
@@ -3228,39 +3241,63 @@ def patch_app(
     print_completion_summary(config, backup=original)
 
 
+def patch_macos_app(args: argparse.Namespace) -> None:
+    app = args.app.expanduser().resolve()
+    config = args.config.expanduser().resolve()
+    original, previous = managed_backup_paths(app)
+    legacy_backups = tuple(
+        dict.fromkeys(
+            (
+                effective_codex_home().resolve() / "ChatGPT-original.app",
+                config.parent / "ChatGPT-original.app",
+            )
+        )
+    )
+    if previous.exists():
+        raise PatchError(
+            f"A previous app snapshot requires recovery or removal: {previous}"
+        )
+
+    stop_target_app_processes(app, args.allow_running)
+    original = ensure_original_backup(
+        app,
+        original,
+        reapply_from=args.reapply_from,
+        legacy_backups=legacy_backups,
+    )
+    patch_app(
+        app,
+        config,
+        original,
+        previous,
+        args.overwrite_config,
+    )
+
+
 def main() -> int:
     args = parse_args()
     try:
-        app = args.app.expanduser().resolve()
-        config = args.config.expanduser().resolve()
-        original, previous = managed_backup_paths(app)
-        legacy_backups = tuple(
-            dict.fromkeys(
-                (
-                    effective_codex_home().resolve() / "ChatGPT-original.app",
-                    config.parent / "ChatGPT-original.app",
+        if sys.platform == "darwin":
+            patch_macos_app(args)
+        elif sys.platform == "win32":
+            if args.app is not None or args.reapply_from is not None:
+                raise PatchError(
+                    "--app and --reapply-from are supported only for macOS installs"
                 )
+            local_app_data = Path(
+                os.environ.get("LOCALAPPDATA")
+                or Path.home() / "AppData" / "Local"
             )
-        )
-        if previous.exists():
+            patch_windows_store_app(
+                args.config.expanduser().resolve(),
+                args.overwrite_config,
+                args.allow_running,
+                local_app_data=local_app_data,
+            )
+        else:
             raise PatchError(
-                f"A previous app snapshot requires recovery or removal: {previous}"
+                "This installer supports macOS and Windows Microsoft Store ChatGPT only"
             )
-
-        stop_target_app_processes(app, args.allow_running)
-        original = ensure_original_backup(
-            app,
-            original,
-            reapply_from=args.reapply_from,
-            legacy_backups=legacy_backups,
-        )
-        patch_app(
-            app,
-            config,
-            original,
-            previous,
-            args.overwrite_config,
-        )
     except PatchError as exc:
         fail(str(exc))
     except PermissionError as exc:

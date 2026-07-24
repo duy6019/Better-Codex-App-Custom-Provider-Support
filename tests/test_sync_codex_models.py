@@ -217,6 +217,7 @@ class PatcherTemplateTests(unittest.TestCase):
 
         with (
             mock.patch.object(patcher.sys, "argv", ["patch_chatgpt_providers.py", "--help"]),
+            mock.patch.object(patcher.sys, "platform", "darwin"),
             redirect_stdout(output),
             self.assertRaisesRegex(SystemExit, "0"),
         ):
@@ -237,6 +238,7 @@ class PatcherTemplateTests(unittest.TestCase):
             mock.patch.object(
                 patcher.sys, "argv", ["patch_chatgpt_providers.py", "--help"]
             ),
+            mock.patch.object(patcher.sys, "platform", "darwin"),
             redirect_stdout(output),
             self.assertRaisesRegex(SystemExit, "0"),
         ):
@@ -252,6 +254,7 @@ class PatcherTemplateTests(unittest.TestCase):
                 "argv",
                 ["patch_chatgpt_providers.py", "--help"],
             ),
+            mock.patch.object(patcher.sys, "platform", "darwin"),
             redirect_stdout(output),
             self.assertRaisesRegex(SystemExit, "0"),
         ):
@@ -911,6 +914,7 @@ class PatchTransactionTests(unittest.TestCase):
 
             with (
                 mock.patch.object(patcher, "parse_args", return_value=args),
+                mock.patch.object(patcher.sys, "platform", "darwin"),
                 mock.patch.object(patcher, "stop_target_app_processes"),
                 mock.patch.object(
                     patcher,
@@ -952,6 +956,7 @@ class PatchTransactionTests(unittest.TestCase):
 
             with (
                 mock.patch.object(patcher, "parse_args", return_value=args),
+                mock.patch.object(patcher.sys, "platform", "darwin"),
                 mock.patch.object(patcher, "ensure_original_backup") as ensure_original,
                 mock.patch.object(patcher, "patch_app"),
                 self.assertRaisesRegex(SystemExit, "1"),
