@@ -9,6 +9,7 @@ cause a clean failure before the installed app is modified.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import hashlib
 import json
 import os
@@ -28,12 +29,13 @@ import sys
 import tempfile
 import textwrap
 import time
-from typing import Any, NoReturn
+from typing import Any, NoReturn, Sequence
 
 
 PATCH_MARKER = b"__codexDesktopModelProvidersPatchV2"
 ASAR_PACKAGE = "@electron/asar@3.2.10"
 PRETTIER_PACKAGE = "prettier@3.6.2"
+WINDOWS_STORE_PACKAGE_NAME = "OpenAI.ChatGPT"
 BUILD_5828_BUNDLE_MARKERS = (
     "async prewarmThreadStart(",
     "async sendConfigReadRequest(",
@@ -782,6 +784,115 @@ def managed_backup_paths(app: Path) -> tuple[Path, Path]:
         app.with_name(f"{app.stem}-original.backup"),
         app.with_name(f"{app.stem}-previous.backup"),
     )
+
+
+@dataclasses.dataclass(frozen=True)
+class WindowsStorePackage:
+    name: str
+    package_full_name: str
+    package_family_name: str
+    version: str
+    architecture: str
+    install_location: Path
+    manifest_path: Path
+    asar_path: Path
+
+
+@dataclasses.dataclass(frozen=True)
+class WindowsToolPaths:
+    makeappx: Path
+    signtool: Path
+
+
+@dataclasses.dataclass(frozen=True)
+class WindowsPatchPaths:
+    root: Path
+    original: Path
+    active: Path
+    previous: Path
+
+
+def windows_patch_paths(local_app_data: Path) -> WindowsPatchPaths:
+    root = local_app_data / "Codex" / "ChatGPTProviderPatch"
+    return WindowsPatchPaths(
+        root=root,
+        original=root / "original",
+        active=root / "active",
+        previous=root / "previous",
+    )
+
+
+def discover_windows_store_package(command_runner: Any) -> WindowsStorePackage:
+    command = [
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        (
+            f"Get-AppxPackage -Name '{WINDOWS_STORE_PACKAGE_NAME}' | "
+            "Select-Object Name, PackageFullName, PackageFamilyName, Version, "
+            "Architecture, InstallLocation | ConvertTo-Json -Compress"
+        ),
+    ]
+    result = command_runner(command)
+    output = result.stdout.strip()
+    if not output:
+        raise PatchError("Expected exactly one Windows Store ChatGPT package")
+    try:
+        package = json.loads(output)
+    except json.JSONDecodeError as exc:
+        raise PatchError("Could not parse the Windows Store package details") from exc
+    if not isinstance(package, dict):
+        raise PatchError("Expected exactly one Windows Store ChatGPT package")
+
+    fields = {
+        "name": "Name",
+        "package_full_name": "PackageFullName",
+        "package_family_name": "PackageFamilyName",
+        "version": "Version",
+        "architecture": "Architecture",
+        "install_location": "InstallLocation",
+    }
+    values: dict[str, str] = {}
+    for attribute, field in fields.items():
+        value = package.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise PatchError(f"Windows Store package is missing {field}")
+        values[attribute] = value.strip()
+
+    install_location = Path(values["install_location"])
+    manifest_path = install_location / "AppxManifest.xml"
+    asar_candidates = tuple(install_location.glob("resources/app.asar"))
+    if not install_location.is_dir():
+        raise PatchError(f"Windows Store package layout is unreadable: {install_location}")
+    if not manifest_path.is_file():
+        raise PatchError(f"Windows Store package is missing manifest: {manifest_path}")
+    if len(asar_candidates) != 1 or not asar_candidates[0].is_file():
+        raise PatchError("Windows Store package must contain exactly one resources/app.asar")
+
+    return WindowsStorePackage(
+        name=values["name"],
+        package_full_name=values["package_full_name"],
+        package_family_name=values["package_family_name"],
+        version=values["version"],
+        architecture=values["architecture"],
+        install_location=install_location,
+        manifest_path=manifest_path,
+        asar_path=asar_candidates[0],
+    )
+
+
+def find_windows_sdk_tools(search_roots: Sequence[Path]) -> WindowsToolPaths:
+    for root in search_roots:
+        for makeappx in sorted(root.rglob("MakeAppx.exe")):
+            signtool = makeappx.with_name("SignTool.exe")
+            if signtool.is_file():
+                return WindowsToolPaths(makeappx=makeappx, signtool=signtool)
+        if any(root.rglob("MakeAppx.exe")):
+            raise PatchError(f"Windows SDK tool not found: SignTool.exe under {root}")
+        if any(root.rglob("SignTool.exe")):
+            raise PatchError(f"Windows SDK tool not found: MakeAppx.exe under {root}")
+    raise PatchError("Windows SDK tools not found: MakeAppx.exe and SignTool.exe")
 
 
 def parse_args() -> argparse.Namespace:
