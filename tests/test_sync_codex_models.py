@@ -197,6 +197,20 @@ class PatcherTemplateTests(unittest.TestCase):
             "modelProvider: await codexSelectedProvider()", patcher.CENTRAL_DIFF
         )
 
+    def test_embedded_diffs_target_build_5813_bundle_symbols(self):
+        self.assertIn("function Qjs(e)", patcher.PICKER_DIFF)
+        self.assertIn("tp(`codex-home`", patcher.CENTRAL_DIFF)
+        self.assertIn("tp(`codex-home`", patcher.PICKER_DIFF)
+        self.assertIn("wQ.jsx", patcher.PICKER_DIFF)
+        self.assertIn("yz.Item", patcher.PICKER_DIFF)
+        self.assertIn("Ym : void 0", patcher.PICKER_DIFF)
+        self.assertIn(
+            "(CodexProviderPatchReact = r(o(), 1))",
+            patcher.PICKER_DIFF,
+        )
+        self.assertNotIn("function MO(e)", patcher.PICKER_DIFF)
+        self.assertNotIn("Xe(`codex-home`", patcher.CENTRAL_DIFF)
+
     def test_patcher_help_describes_explicit_provider_selection(self):
         output = io.StringIO()
 
@@ -260,25 +274,37 @@ class PatcherTemplateTests(unittest.TestCase):
 
         provider_section = patched.split(
             "function CodexCustomProviderPickerSection()", 1
-        )[1].split("function MO(e)", 1)[0]
+        )[1].split("function Qjs(e)", 1)[0]
         for component in ("Item", "Title", "Separator"):
-            self.assertIn(f"Ly.{component}", provider_section)
-            self.assertNotIn(f"zy.{component}", provider_section)
+            self.assertIn(f"yz.{component}", provider_section)
+            self.assertNotIn(f"Ly.{component}", provider_section)
 
     def test_picker_import_hunk_tolerates_added_upstream_initializers(self):
         hunk = patcher.parse_hunks(patcher.PICKER_DIFF)[2]
         diff = "@@ -1,1 +1,1 @@\n" + "\n".join(hunk) + "\n"
         source = """}
-var PO,
-  FO,
-  IO = e(() => {
-    ((PO = w()),
-      T(),
-      Q(),
-      Mg(),
-      wg(),
-      Pg(),
-      (FO = k()));
+var eMs,
+  wQ,
+  tMs = e(() => {
+    ((eMs = c()),
+      fd(),
+      id(),
+      qcs(),
+      nss(),
+      rss(),
+      OAs(),
+      Xm(),
+      KX(),
+      fD(),
+      bz(),
+      Tos(),
+      hcs(),
+      ncs(),
+      Sos(),
+      Pos(),
+      kos(),
+      fcs(),
+      (wQ = J()));
   }),
 """
 
@@ -290,8 +316,7 @@ var PO,
 
             patched = bundle.read_text(encoding="utf-8")
 
-        self.assertIn("CodexProviderPatchReact", patched)
-        self.assertIn("(CodexProviderPatchReact = t(m(), 1))", patched)
+        self.assertIn("(CodexProviderPatchReact = r(o(), 1))", patched)
 
 
 class CurrentBundleTests(unittest.TestCase):

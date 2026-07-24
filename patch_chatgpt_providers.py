@@ -71,11 +71,12 @@ DEFAULT_PROVIDER_CONFIG: dict[str, Any] = {
 }
 
 
-CENTRAL_DIFF = r"""@@ -4631,6 +4631,146 @@
+CENTRAL_DIFF = r"""@@ -137534,6 +137678,146 @@
+ function o9t(e) {
    if (`data` in e) return e;
-   let t = oe(e);
+   let t = obe(e);
    return t == null ? e : { ...e, data: t };
-+}
+ }
 +function codexProviderRoutingFallback() {
 +  return {
 +    version: 1,
@@ -167,12 +168,12 @@ CENTRAL_DIFF = r"""@@ -4631,6 +4631,146 @@
 +  return (
 +    (t.promise = (async () => {
 +      try {
-+        let { codexHome: e } = await Xe(`codex-home`, {
++        let { codexHome: e } = await tp(`codex-home`, {
 +            params: { hostId: `local` },
 +          }),
 +          n = e.includes(`\\`) && !e.includes(`/`) ? `\\` : `/`,
 +          r = `${e.replace(/[\\/]+$/u, ``)}${n}desktop-model-providers.json`,
-+          { contents: i } = await Xe(`read-file`, {
++          { contents: i } = await tp(`read-file`, {
 +            params: { hostId: `local`, path: r },
 +          }),
 +          a = codexNormalizeProviderRoutingConfig(JSON.parse(i));
@@ -221,10 +222,11 @@ CENTRAL_DIFF = r"""@@ -4631,6 +4631,146 @@
 +  )
 +    return { ...t, modelProvider: await codexSelectedProvider() };
 +  return t;
- }
- var jf,
-   Mf,
-@@ -4800,6 +4940,7 @@
++}
+ var s9t,
+@@ -137749,6 +137750,8 @@
+         async sendRequest(e, t, n) {
+           if (this.dispatchMessage == null)
              throw Error(
                `AppServerRequestClient is missing a message dispatcher`,
              );
@@ -232,21 +234,31 @@ CENTRAL_DIFF = r"""@@ -4631,6 +4631,146 @@
            return e === `config/read`
              ? this.sendConfigReadRequest(t, n)
              : this.enqueueRequest(e, t, n);
-@@ -4809,6 +4950,7 @@
-             throw Error(
-               `AppServerRequestClient is missing a message dispatcher`,
-             );
-+          e = await codexPatchAppServerParams(`thread/start`, e);
-           return this.enqueueRequest(
-             `thread/start`,
-             e,
+@@ -137758,6 +137761,12 @@
+           try {
++            e = await codexPatchAppServerParams(`thread/start`, e);
+             let a = await this.enqueueRequest(
+               `thread/start`,
+               e,
+               { ...t, priority: n, trace: t?.trace ?? i?.trace ?? null },
+               (e) => {
 """
 
 
-PICKER_DIFF = r"""@@ -10162,6 +10162,204 @@
-       };
- }
- var jO = e(() => {});
+PICKER_DIFF = r"""@@ -548655,6 +548655,204 @@
+ var Xjs,
+   Zjs = e(() => {
+     (qo(),
+       ad(),
+       KD(),
+       (Xjs = Aa(Q, (e, { get: t }) =>
+         Yjs({
+           conversationId: e,
+           resumeState: t(PD, e) ?? void 0,
+           turnCount: t(LD, e),
+         }),
+       )));
+   });
 +function codexPickerProviderRoutingFallback() {
 +  return {
 +    version: 1,
@@ -338,13 +350,13 @@ PICKER_DIFF = r"""@@ -10162,6 +10162,204 @@
 +  return (
 +    (t.promise = (async () => {
 +      try {
-+        let { codexHome: e } = await ye(`codex-home`, {
++        let { codexHome: e } = await tp(`codex-home`, {
 +            params: { hostId: `local` },
 +          }),
 +          n = e.includes(`\\`) && !e.includes(`/`) ? `\\` : `/`,
 +          r = `${e.replace(/[\\/]+$/u, ``)}${n}desktop-model-providers.json`;
 +        t.configPath = r;
-+        let { contents: i } = await ye(`read-file`, {
++        let { contents: i } = await tp(`read-file`, {
 +            params: { hostId: `local`, path: r },
 +          }),
 +          a = codexPickerNormalizeProviderRoutingConfig(JSON.parse(i));
@@ -404,14 +416,14 @@ PICKER_DIFF = r"""@@ -10162,6 +10162,204 @@
 +      (t?.preventDefault(), codexWriteCustomProviderChoice(e), o(e));
 +    },
 +    c = e.providers.map((e) =>
-+      (0, FO.jsx)(
-+        Ly.Item,
++      (0, wQ.jsx)(
++        yz.Item,
 +        {
-+          RightIcon: a === e.id ? ct : void 0,
++          RightIcon: a === e.id ? Ym : void 0,
 +          SubText:
 +            e.description.length === 0
 +              ? null
-+              : (0, FO.jsx)(`span`, {
++              : (0, wQ.jsx)(`span`, {
 +                  className: `text-token-description-foreground`,
 +                  children: e.description,
 +                }),
@@ -421,44 +433,43 @@ PICKER_DIFF = r"""@@ -10162,6 +10162,204 @@
 +        e.id,
 +      ),
 +    );
-+  return (0, FO.jsxs)(FO.Fragment, {
++  return (0, wQ.jsxs)(wQ.Fragment, {
 +    children: [
-+      (0, FO.jsx)(Ly.Title, { children: `Provider for new tasks` }),
++      (0, wQ.jsx)(yz.Title, { children: `Provider for new tasks` }),
 +      n == null
 +        ? null
-+        : (0, FO.jsx)(Ly.Item, {
++        : (0, wQ.jsx)(yz.Item, {
 +            disabled: !0,
-+            SubText: (0, FO.jsx)(`span`, {
++            SubText: (0, wQ.jsx)(`span`, {
 +              className: `text-token-description-foreground`,
 +              children: n,
 +            }),
 +            children: `Provider config error — using fallback`,
 +          }),
 +      c,
-+      (0, FO.jsx)(Ly.Separator, {}),
++      (0, wQ.jsx)(yz.Separator, {}),
 +    ],
 +  });
 +}
- function MO(e) {
-   let t = (0, PO.c)(169),
+ function Qjs(e) {
+   let t = (0, eMs.c)(164),
      {
-@@ -10312,6 +10510,7 @@
-       ? (s = t[48])
-       : ((s = (0, FO.jsxs)(FO.Fragment, {
+@@ -548925,6 +549036,1 @@
+       : ((g = (0, wQ.jsxs)(wQ.Fragment, {
            children: [
-+            (0, FO.jsx)(CodexCustomProviderPickerSection, {}),
-             a,
-             (0, FO.jsx)(`div`, {
++            (0, wQ.jsx)(CodexCustomProviderPickerSection, {}),
+             m,
+             (0, wQ.jsx)(`div`, {
                className: `vertical-scroll-fade-mask flex max-h-[250px] flex-col overflow-y-auto`,
-@@ -10984,6 +11183,8 @@
+@@ -549575,6 +549577,8 @@
  }
- var PO,
-   FO,
+ var eMs,
+   wQ,
 +  CodexProviderPatchReact,
-   IO = e(() => {
-     ((PO = w()),
-+      (CodexProviderPatchReact = t(m(), 1)),
-       T(),
+   tMs = e(() => {
+     ((eMs = c()),
++      (CodexProviderPatchReact = r(o(), 1)),
+       fd(),
 """
 
 
