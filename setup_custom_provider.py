@@ -3,17 +3,21 @@
 
 from __future__ import annotations
 
+import argparse
 from dataclasses import dataclass
+import getpass
 import json
 from pathlib import Path
 import re
 import subprocess
-from typing import Callable, Optional
+import sys
+from typing import Callable, Optional, Sequence
 
 from sync_codex_models import (
     SyncError,
     atomic_write_json,
     atomic_write_text,
+    codex_home,
     read_provider_routing,
     read_text,
     replace_toml_table,
@@ -70,6 +74,18 @@ def validate_auth_method(value: str) -> str:
 
 def keychain_service(provider_id: str) -> str:
     return f"codex-{validate_provider_id(provider_id)}"
+
+
+def user_level_config_path(path: Path) -> Path:
+    config_path = path.expanduser().resolve()
+    default_path = (codex_home() / "config.toml").expanduser().resolve()
+    if (
+        config_path.name == "config.toml"
+        and config_path.parent.name == ".codex"
+        and config_path != default_path
+    ):
+        raise SetupError("Custom providers must use a user-level config.toml")
+    return config_path
 
 
 def remove_toml_table(contents: str, table: str) -> str:
@@ -158,6 +174,7 @@ def setup_provider(
     api_key: Optional[str] = None,
     command_runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> None:
+    toml_path = user_level_config_path(toml_path)
     provider = ProviderSetup(
         validate_provider_id(provider.provider_id),
         provider.label.strip(),
@@ -187,3 +204,65 @@ def setup_provider(
                 f"'{keychain_service(provider.provider_id)}'"
             ) from exc
         raise
+
+
+def prompt_provider_setup(
+    *,
+    input_func: Callable[[str], str] = input,
+    getpass_func: Callable[[str], str] = getpass.getpass,
+) -> tuple[ProviderSetup, Optional[str]]:
+    provider_id = validate_provider_id(input_func("Provider ID: "))
+    label = input_func("Display name: ").strip()
+    if not label:
+        raise SetupError("Provider display name cannot be empty")
+    base_url = validate_base_url(input_func("Base URL: "))
+    wire_api = validate_wire_api(input_func("Wire API [responses]: ") or "responses")
+    auth_method = validate_auth_method(
+        input_func("Authentication [keychain/none] [keychain]: ") or "keychain"
+    )
+    api_key = (
+        getpass_func(f"API key for {keychain_service(provider_id)}: ")
+        if auth_method == "keychain"
+        else None
+    )
+    return ProviderSetup(provider_id, label, base_url, wire_api, auth_method), api_key
+
+
+def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
+    home = codex_home()
+    parser = argparse.ArgumentParser(
+        description="Add or update one Codex custom provider."
+    )
+    parser.add_argument("--config", type=Path, default=home / "config.toml")
+    parser.add_argument(
+        "--provider-config",
+        type=Path,
+        default=home / "desktop-model-providers.json",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    args = parse_args(argv)
+    try:
+        provider, api_key = prompt_provider_setup()
+        config_path = args.config.expanduser().resolve()
+        routing_path = args.provider_config.expanduser().resolve()
+        setup_provider(provider, config_path, routing_path, api_key=api_key)
+    except SyncError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Updated Codex configuration: {config_path}")
+    print(f"Updated provider routing: {routing_path}")
+    if provider.auth_method == "keychain":
+        print(
+            f"Stored API key in Keychain service: "
+            f"{keychain_service(provider.provider_id)}"
+        )
+    print("Restart ChatGPT/Codex before starting a task with this provider.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

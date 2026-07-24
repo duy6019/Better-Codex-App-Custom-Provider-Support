@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import subprocess
 import tempfile
@@ -88,3 +89,95 @@ args = ["find-generic-password"]
             )
 
             runner.assert_not_called()
+
+    def test_setup_provider_rejects_project_local_config(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config_path = root / "project" / ".codex" / "config.toml"
+            runner = mock.Mock()
+            provider = setup.ProviderSetup(
+                "acme", "Acme", "https://api.acme.example/v1", "responses", "keychain"
+            )
+
+            with self.assertRaisesRegex(setup.SetupError, "user-level"):
+                setup.setup_provider(
+                    provider,
+                    config_path,
+                    root / "desktop-model-providers.json",
+                    api_key="test-key",
+                    command_runner=runner,
+                )
+
+            runner.assert_not_called()
+
+
+class InteractiveSetupTests(unittest.TestCase):
+    def test_prompt_uses_responses_and_keychain_defaults(self):
+        answers = iter(["acme", "Acme", "https://api.acme.example/v1", "", ""])
+
+        provider, api_key = setup.prompt_provider_setup(
+            input_func=lambda _: next(answers), getpass_func=lambda _: "test-key"
+        )
+
+        self.assertEqual(
+            provider,
+            setup.ProviderSetup(
+                "acme",
+                "Acme",
+                "https://api.acme.example/v1",
+                "responses",
+                "keychain",
+            ),
+        )
+        self.assertEqual(api_key, "test-key")
+
+    def test_prompt_allows_no_auth_without_requesting_key(self):
+        answers = iter(["acme", "Acme", "https://api.acme.example/v1", "chat", "none"])
+        key_prompt = mock.Mock()
+
+        provider, api_key = setup.prompt_provider_setup(
+            input_func=lambda _: next(answers), getpass_func=key_prompt
+        )
+
+        self.assertEqual(provider.auth_method, "none")
+        self.assertIsNone(api_key)
+        key_prompt.assert_not_called()
+
+    def test_setup_updates_config_and_menu_without_changing_model_mappings(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            toml_path = root / "config.toml"
+            routing_path = root / "desktop-model-providers.json"
+            routing_path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "default_provider": "openai",
+                        "providers": [{"id": "openai", "label": "OpenAI"}],
+                        "model_providers": {"keep/model": "keep"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            runner = mock.Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+
+            setup.setup_provider(
+                setup.ProviderSetup(
+                    "acme",
+                    "Acme",
+                    "https://api.acme.example/v1",
+                    "responses",
+                    "keychain",
+                ),
+                toml_path,
+                routing_path,
+                api_key="test-key",
+                command_runner=runner,
+            )
+
+            self.assertIn(
+                "[model_providers.acme.auth]", toml_path.read_text(encoding="utf-8")
+            )
+            routing = json.loads(routing_path.read_text(encoding="utf-8"))
+            self.assertEqual(routing["model_providers"], {"keep/model": "keep"})
+            self.assertEqual(routing["providers"][-1]["id"], "acme")
