@@ -355,20 +355,22 @@ class PatcherTemplateTests(unittest.TestCase):
             self.assertIn(f"KR.{component}", provider_section)
             self.assertNotIn(f"yz.{component}", provider_section)
 
-    def test_provider_picker_is_wrapped_into_all_top_level_model_menus(self):
-        self.assertNotIn(
-            """          children: [
-            (0, TQ.jsx)(CodexCustomProviderPickerSection, {}),
-            m,""",
+    def test_provider_picker_is_rendered_in_model_choice_menus_only(self):
+        self.assertIn(
+            """           children: [
++            (0, TQ.jsx)(CodexCustomProviderPickerSection, {}),
+             m,""",
             patcher.PICKER_DIFF,
         )
-        self.assertIn(
+        self.assertNotIn(
             """+          children: (0, TQ.jsxs)(TQ.Fragment, {
 +            children: [
 +              (0, TQ.jsx)(CodexCustomProviderPickerSection, {}),
 +              ye,""",
             patcher.PICKER_DIFF,
         )
+        # A unified-diff edit of the native root content includes this line.
+        self.assertNotIn("children: ye", patcher.PICKER_DIFF)
         self.assertIn(
             """+          children: (0, Kcs.jsxs)(Kcs.Fragment, {
 +            children: [

@@ -466,15 +466,13 @@ PICKER_DIFF = r"""@@ -521283,2 +521283,8 @@
  function Qjs(e) {
    let t = (0, eMs.c)(164),
      {
-@@ -549830,1 +549830,7 @@
-           triggerButton: N,
--          children: ye,
-+          children: (0, TQ.jsxs)(TQ.Fragment, {
-+            children: [
-+              (0, TQ.jsx)(CodexCustomProviderPickerSection, {}),
-+              ye,
-+            ],
-+          }),
+@@ -548925,6 +549036,7 @@
+       : ((g = (0, TQ.jsxs)(TQ.Fragment, {
+           children: [
++            (0, TQ.jsx)(CodexCustomProviderPickerSection, {}),
+             m,
+             (0, TQ.jsx)(`div`, {
+               className: `vertical-scroll-fade-mask flex max-h-[250px] flex-col overflow-y-auto`,
 @@ -549575,6 +549577,8 @@
  }
  var eMs,
