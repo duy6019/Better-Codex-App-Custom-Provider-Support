@@ -56,28 +56,12 @@ DEFAULT_PROVIDER_CONFIG: dict[str, Any] = {
                 "Built-in provider; uses your signed-in ChatGPT account"
             ),
         },
-        {
-            "id": "9router",
-            "label": "9router",
-            "description": (
-                "Custom provider; uses [model_providers.9router] from config.toml"
-            ),
-        },
     ],
-    "model_providers": {
-        "cx/gpt-5.6-sol": "9router",
-        "cx/gpt-5.6-terra": "9router",
-        "cx/gpt-5.6-luna": "9router",
-        "cx/gpt-5.5": "9router",
-        "cx/gpt-5.4": "9router",
-        "cx/gpt-5.4-mini": "9router",
-        "cx/gpt-5.2": "9router",
-        "cx/codex-auto-review": "9router",
-    },
+    "model_providers": {},
 }
 
 
-CENTRAL_DIFF = r"""@@ -137534,6 +137678,146 @@
+CENTRAL_DIFF = r"""@@ -137534,6 +137678,131 @@
  function p9t(e) {
    if (`data` in e) return e;
    let t = fbe(e);
@@ -93,22 +77,8 @@ CENTRAL_DIFF = r"""@@ -137534,6 +137678,146 @@
 +        label: `ChatGPT / OpenAI`,
 +        description: `Uses your signed-in ChatGPT account`,
 +      },
-+      {
-+        id: `9router`,
-+        label: `9router`,
-+        description: `Uses the 9router provider from config.toml`,
-+      },
 +    ],
-+    modelProviders: {
-+      "cx/gpt-5.6-sol": `9router`,
-+      "cx/gpt-5.6-terra": `9router`,
-+      "cx/gpt-5.6-luna": `9router`,
-+      "cx/gpt-5.5": `9router`,
-+      "cx/gpt-5.4": `9router`,
-+      "cx/gpt-5.4-mini": `9router`,
-+      "cx/gpt-5.2": `9router`,
-+      "cx/codex-auto-review": `9router`,
-+    },
++    modelProviders: {},
 +  };
 +}
 +function codexNormalizeProviderRoutingConfig(e) {
@@ -260,7 +230,7 @@ PICKER_DIFF = r"""@@ -521283,2 +521283,8 @@
 +              ee,
 +            ],
 +          }),
-@@ -548655,6 +548655,204 @@
+@@ -548655,6 +548655,189 @@
  var Xjs,
    Zjs = e(() => {
      (Ho(),
@@ -284,22 +254,8 @@ PICKER_DIFF = r"""@@ -521283,2 +521283,8 @@
 +        label: `ChatGPT / OpenAI`,
 +        description: `Uses your signed-in ChatGPT account`,
 +      },
-+      {
-+        id: `9router`,
-+        label: `9router`,
-+        description: `Uses the 9router provider from config.toml`,
-+      },
 +    ],
-+    modelProviders: {
-+      "cx/gpt-5.6-sol": `9router`,
-+      "cx/gpt-5.6-terra": `9router`,
-+      "cx/gpt-5.6-luna": `9router`,
-+      "cx/gpt-5.5": `9router`,
-+      "cx/gpt-5.4": `9router`,
-+      "cx/gpt-5.4-mini": `9router`,
-+      "cx/gpt-5.2": `9router`,
-+      "cx/codex-auto-review": `9router`,
-+    },
++    modelProviders: {},
 +  };
 +}
 +function codexPickerNormalizeProviderRoutingConfig(e) {

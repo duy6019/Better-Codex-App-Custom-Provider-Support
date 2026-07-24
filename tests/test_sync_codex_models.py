@@ -150,10 +150,26 @@ class SyncArgumentTests(unittest.TestCase):
 
 
 class PatcherTemplateTests(unittest.TestCase):
-    def test_patcher_default_template_uses_9router(self):
-        self.assertEqual(patcher.DEFAULT_PROVIDER_CONFIG["providers"][1]["id"], "9router")
-        self.assertNotIn("openrouter", patcher.CENTRAL_DIFF)
-        self.assertNotIn("openrouter", patcher.PICKER_DIFF)
+    def test_patcher_default_template_is_provider_agnostic(self):
+        self.assertEqual(
+            patcher.DEFAULT_PROVIDER_CONFIG,
+            {
+                "version": 1,
+                "default_provider": "openai",
+                "providers": [
+                    {
+                        "id": "openai",
+                        "label": "ChatGPT / OpenAI",
+                        "description": (
+                            "Built-in provider; uses your signed-in ChatGPT account"
+                        ),
+                    }
+                ],
+                "model_providers": {},
+            },
+        )
+        self.assertNotIn("9router", patcher.CENTRAL_DIFF)
+        self.assertNotIn("9router", patcher.PICKER_DIFF)
         self.assertNotIn("\n++", patcher.CENTRAL_DIFF)
         self.assertNotIn("\n++", patcher.PICKER_DIFF)
 
