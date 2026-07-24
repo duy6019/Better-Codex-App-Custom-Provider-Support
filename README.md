@@ -9,7 +9,9 @@ The patch:
 - Keeps tasks from all configured providers visible.
 - Keeps the normal ChatGPT login active for OpenAI models.
 
-This project currently supports **macOS only**.
+The desktop application patch is macOS-only. The standalone
+`setup_custom_provider.py` wizard supports macOS Keychain and Windows
+Credential Manager.
 
 > [!CAUTION]
 > Changing the provider in a running conversation/thread does **not** work. The conversation/thread continues using the provider it started with.
@@ -19,11 +21,14 @@ This project currently supports **macOS only**.
 
 ## Requirements
 
-- macOS
+- macOS for the desktop application patch
 - Official ChatGPT `26.721.31836`, build `5828`, installed at `/Applications/ChatGPT.app`
 - Python 3.9 or newer
 - Node.js with `npx`
 - Codex CLI available as `codex`
+
+Windows is supported for the standalone `setup_custom_provider.py` wizard with
+Windows Credential Manager; it does not support the desktop application patch.
 
 ## Install
 
@@ -93,6 +98,12 @@ Codex configuration files manually:
 
 ```bash
 python3 setup_custom_provider.py
+```
+
+On Windows, run:
+
+```powershell
+py setup_custom_provider.py
 ```
 
 The wizard asks for the provider ID, display name, base URL, wire API, and

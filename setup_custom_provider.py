@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Set up one macOS Keychain-backed Codex custom provider."""
+"""Set up one Codex custom provider using native secure credential storage."""
 
 from __future__ import annotations
 
@@ -413,6 +413,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if provider.auth_method == "keychain":
         print(
             f"Stored API key in Keychain service: "
+            f"{keychain_service(provider.provider_id)}"
+        )
+    elif provider.auth_method == "credential-manager":
+        print(
+            f"Stored API key in Windows Credential Manager entry: "
             f"{keychain_service(provider.provider_id)}"
         )
     print("Restart ChatGPT/Codex before starting a task with this provider.")

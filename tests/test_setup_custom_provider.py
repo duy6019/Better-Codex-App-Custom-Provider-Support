@@ -114,6 +114,15 @@ args = ["find-generic-password"]
         self.assertTrue(command[4].endswith("\n}"))
         self.assertEqual(command[5:], [])
 
+    def test_windows_credential_write_script_clears_unmanaged_and_managed_key_bytes(self):
+        script = setup.windows_credential_write_script("codex-acme", "acme")
+
+        self.assertIn(
+            "[Runtime.InteropServices.Marshal]::WriteByte($blob, $index, 0)",
+            script,
+        )
+        self.assertIn("[Array]::Clear($bytes, 0, $bytes.Length)", script)
+
     def test_store_windows_api_key_passes_non_ascii_key_as_base64_stdin(self):
         api_key = "test key & ค่า"
         encoded_key = base64.b64encode(api_key.encode("utf-16le")).decode("ascii")
@@ -271,13 +280,42 @@ class InteractiveSetupTests(unittest.TestCase):
             self.assertEqual(routing["providers"][-1]["id"], "acme")
 
 
+class MainTests(unittest.TestCase):
+    def test_main_confirms_windows_credential_manager_storage(self):
+        provider = setup.ProviderSetup(
+            "acme", "Acme", "https://api.acme.example/v1", "responses", "credential-manager"
+        )
+        args = mock.Mock(
+            config=Path("config.toml"),
+            provider_config=Path("desktop-model-providers.json"),
+        )
+
+        with (
+            mock.patch.object(setup, "parse_args", return_value=args),
+            mock.patch.object(setup, "prompt_provider_setup", return_value=(provider, "test-key")),
+            mock.patch.object(setup, "setup_provider"),
+            mock.patch("builtins.print") as print_mock,
+        ):
+            self.assertEqual(setup.main(), 0)
+
+        print_mock.assert_any_call(
+            "Stored API key in Windows Credential Manager entry: codex-acme"
+        )
+
+
 class DocumentationTests(unittest.TestCase):
     def test_readme_documents_windows_credential_manager_without_a_literal_key(self):
         readme = (Path(__file__).parents[1] / "README.md").read_text(encoding="utf-8")
 
         self.assertIn("Windows Credential Manager", readme)
         self.assertIn("credential-manager", readme)
+        self.assertIn("The desktop application patch is macOS-only", readme)
+        self.assertIn("py setup_custom_provider.py", readme)
         self.assertNotIn("API_KEY_CUA_BAN", readme)
+
+    def test_setup_script_describes_platform_neutral_credential_support(self):
+        self.assertIn("native secure credential storage", setup.__doc__)
+        self.assertNotIn("macOS Keychain-backed", setup.__doc__)
 
     def test_readme_documents_custom_provider_setup_without_a_literal_key(self):
         readme = (Path(__file__).parents[1] / "README.md").read_text(encoding="utf-8")
