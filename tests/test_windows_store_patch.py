@@ -151,6 +151,13 @@ class WindowsStoreDiscoveryTests(unittest.TestCase):
             with self.assertRaisesRegex(patcher.PatchError, "Node.js tools"):
                 patcher.find_windows_node_tools()
 
+    def test_windows_uses_npx_cmd_to_bypass_powershell_execution_policy(self):
+        with mock.patch.object(patcher.sys, "platform", "win32"):
+            self.assertEqual(patcher.npx_executable(), "npx.cmd")
+
+        with mock.patch.object(patcher.sys, "platform", "darwin"):
+            self.assertEqual(patcher.npx_executable(), "npx")
+
 
 class WindowsPackageBuildTests(unittest.TestCase):
     def test_custom_identity_uses_the_local_certificate_subject(self):

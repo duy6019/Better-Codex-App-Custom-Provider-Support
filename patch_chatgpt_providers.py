@@ -955,11 +955,21 @@ def find_windows_sdk_tools(search_roots: Sequence[Path]) -> WindowsToolPaths:
 
 
 def find_windows_node_tools() -> None:
-    missing = tuple(tool for tool in ("node", "npx") if shutil.which(tool) is None)
+    missing = tuple(
+        tool
+        for tool in ("node.exe", "npx.cmd")
+        if shutil.which(tool) is None
+    )
     if missing:
         raise PatchError(
             "Node.js tools not found on PATH: " + ", ".join(missing)
         )
+
+
+def npx_executable() -> str:
+    """Avoid PowerShell's execution-policy-bound npx.ps1 on Windows."""
+
+    return "npx.cmd" if sys.platform == "win32" else "npx"
 
 
 def windows_package_identity(
@@ -1131,13 +1141,27 @@ def build_windows_patched_msix(
     )
     _run_windows_package_command(
         command_runner,
-        ["npx", "--yes", ASAR_PACKAGE, "extract", str(copied_asar), str(extracted)],
+        [
+            npx_executable(),
+            "--yes",
+            ASAR_PACKAGE,
+            "extract",
+            str(copied_asar),
+            str(extracted),
+        ],
     )
     bundle = current_patch_bundle(extracted / "webview" / "assets")
     patch_current_bundle(bundle)
     _run_windows_package_command(
         command_runner,
-        ["npx", "--yes", ASAR_PACKAGE, "pack", str(extracted), str(copied_asar)],
+        [
+            npx_executable(),
+            "--yes",
+            ASAR_PACKAGE,
+            "pack",
+            str(extracted),
+            str(copied_asar),
+        ],
     )
     if not contains_marker(copied_asar):
         raise PatchError("Packed Windows ASAR does not contain the patch marker")
@@ -1431,7 +1455,7 @@ def ensure_windows_original(
         _run_windows_package_command(
             command_runner,
             [
-                "npx",
+                npx_executable(),
                 "--yes",
                 ASAR_PACKAGE,
                 "extract",
@@ -2890,7 +2914,7 @@ def apply_unified_diff(path: Path, unified_diff: str) -> None:
 
 def patch_current_bundle(bundle: Path) -> None:
     run(
-        ["npx", "--yes", PRETTIER_PACKAGE, "--write", str(bundle)],
+        [npx_executable(), "--yes", PRETTIER_PACKAGE, "--write", str(bundle)],
         label="Preparing the JavaScript bundle",
     )
     apply_unified_diff(bundle, CENTRAL_DIFF)
@@ -2903,7 +2927,7 @@ def patch_current_bundle(bundle: Path) -> None:
         raise PatchError("Provider picker missing after patch")
 
     run(
-        ["npx", "--yes", PRETTIER_PACKAGE, "--write", str(bundle)],
+        [npx_executable(), "--yes", PRETTIER_PACKAGE, "--write", str(bundle)],
         label="Formatting the patched JavaScript",
     )
     run(

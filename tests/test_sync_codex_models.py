@@ -513,7 +513,7 @@ class CurrentBundleTests(unittest.TestCase):
                 [
                     mock.call(
                         [
-                            "npx",
+                            patcher.npx_executable(),
                             "--yes",
                             patcher.PRETTIER_PACKAGE,
                             "--write",
@@ -523,7 +523,7 @@ class CurrentBundleTests(unittest.TestCase):
                     ),
                     mock.call(
                         [
-                            "npx",
+                            patcher.npx_executable(),
                             "--yes",
                             patcher.PRETTIER_PACKAGE,
                             "--write",
