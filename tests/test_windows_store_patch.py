@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import unittest
 from unittest import mock
+import zipfile
 
 import patch_chatgpt_providers as patcher
 
@@ -897,3 +898,177 @@ class WindowsRollbackTests(unittest.TestCase):
                 "'OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__managed'",
                 verification_script,
             )
+
+    def test_update_uses_candidate_version_for_verification_and_active_metadata(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = patcher.windows_patch_paths(root)
+            paths.original.mkdir(parents=True)
+            (paths.original / "package.json").write_text(
+                json.dumps(
+                    {
+                        "name": "OpenAI.ChatGPT",
+                        "store_package_full_name": "store_2.0.0.0",
+                        "source_version": "2.0.0.0",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            paths.active.mkdir(parents=True)
+            (paths.active / "previous.msix").write_bytes(b"previous")
+            (paths.active / "package.json").write_text(
+                json.dumps(
+                    {
+                        "custom_package_name": "OpenAI.ChatGPT.CodexPatch",
+                        "custom_package_full_name": (
+                            "OpenAI.ChatGPT.CodexPatch_1.0.0.0_x64__managed"
+                        ),
+                        "custom_package_family_name": (
+                            "OpenAI.ChatGPT.CodexPatch_managed"
+                        ),
+                        "custom_package_publisher": "CN=Old Patch",
+                        "source_version": "1.0.0.0",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            candidate = root / "candidate.msix"
+            with zipfile.ZipFile(candidate, "w") as package:
+                package.writestr(
+                    "AppxManifest.xml",
+                    '<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">'
+                    '<Identity Name="OpenAI.ChatGPT.CodexPatch" '
+                    'Publisher="CN=New Patch" Version="2.0.0.0" />'
+                    "</Package>",
+                )
+            install = root / "installed-candidate"
+            (install / "resources").mkdir(parents=True)
+            (install / "resources" / "app.asar").write_bytes(patcher.PATCH_MARKER)
+            payload = json.dumps(
+                {
+                    "Name": "OpenAI.ChatGPT.CodexPatch",
+                    "PackageFullName": (
+                        "OpenAI.ChatGPT.CodexPatch_2.0.0.0_x64__candidate"
+                    ),
+                    "PackageFamilyName": "OpenAI.ChatGPT.CodexPatch_candidate",
+                    "Publisher": "CN=New Patch",
+                    "Version": "2.0.0.0",
+                    "InstallLocation": str(install),
+                }
+            )
+            scripts = []
+
+            def runner(command):
+                script = command[-1]
+                scripts.append(script)
+                if "ConvertTo-Json" in script:
+                    return completed(command, payload)
+                return completed(command)
+
+            patcher.deploy_windows_msix(candidate, paths, command_runner=runner)
+
+            add_script, query_script = scripts[:2]
+            self.assertIn(
+                "PackageFullName -eq "
+                "'OpenAI.ChatGPT.CodexPatch_1.0.0.0_x64__managed'",
+                add_script,
+            )
+            self.assertIn("Version.ToString() -eq '2.0.0.0'", query_script)
+            self.assertIn("Publisher -eq 'CN=New Patch'", query_script)
+            self.assertNotIn("Version.ToString() -eq '1.0.0.0'", query_script)
+            metadata = json.loads((paths.active / "package.json").read_text())
+            self.assertEqual(
+                metadata["custom_package_full_name"],
+                "OpenAI.ChatGPT.CodexPatch_2.0.0.0_x64__candidate",
+            )
+            self.assertEqual(
+                metadata["custom_package_family_name"],
+                "OpenAI.ChatGPT.CodexPatch_candidate",
+            )
+            self.assertEqual(metadata["custom_package_publisher"], "CN=New Patch")
+            self.assertEqual(metadata["source_version"], "2.0.0.0")
+
+    def test_add_failure_after_registration_discovers_and_removes_exact_candidate(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = patcher.windows_patch_paths(root)
+            candidate = root / "candidate.msix"
+            with zipfile.ZipFile(candidate, "w") as package:
+                package.writestr(
+                    "AppxManifest.xml",
+                    '<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">'
+                    '<Identity Name="OpenAI.ChatGPT.CodexPatch" '
+                    'Publisher="CN=Candidate" Version="2.0.0.0" />'
+                    "</Package>",
+                )
+            install = root / "installed-candidate"
+            (install / "resources").mkdir(parents=True)
+            (install / "resources" / "app.asar").write_bytes(b"unmarked")
+            package_full_name = (
+                "OpenAI.ChatGPT.CodexPatch_2.0.0.0_x64__candidate"
+            )
+            payload = json.dumps(
+                {
+                    "Name": "OpenAI.ChatGPT.CodexPatch",
+                    "PackageFullName": package_full_name,
+                    "PackageFamilyName": "OpenAI.ChatGPT.CodexPatch_candidate",
+                    "Publisher": "CN=Candidate",
+                    "Version": "2.0.0.0",
+                    "InstallLocation": str(install),
+                }
+            )
+            scripts = []
+
+            def runner(command):
+                script = command[-1]
+                scripts.append(script)
+                if "Add-AppxPackage" in script:
+                    raise patcher.PatchError("Add-AppxPackage failed after registration")
+                if "ConvertTo-Json" in script:
+                    # Cleanup must use the marker-free registration query.
+                    self.assertNotIn(patcher.PATCH_MARKER.decode(), script)
+                    return completed(command, payload)
+                return completed(command)
+
+            with self.assertRaisesRegex(
+                patcher.PatchError, "Add-AppxPackage failed after registration"
+            ):
+                patcher.deploy_windows_msix(candidate, paths, command_runner=runner)
+
+            remove_scripts = [script for script in scripts if "Remove-AppxPackage" in script]
+            self.assertEqual(len(remove_scripts), 1)
+            self.assertIn(
+                f"PackageFullName -eq '{package_full_name}'",
+                remove_scripts[0],
+            )
+            self.assertFalse(paths.active.exists())
+
+    def test_registration_verification_rejects_missing_identity_fields(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = patcher.windows_patch_paths(root)
+            candidate = root / "candidate.msix"
+            candidate.write_bytes(b"candidate")
+            install = root / "installed-candidate"
+            (install / "resources").mkdir(parents=True)
+            (install / "resources" / "app.asar").write_bytes(patcher.PATCH_MARKER)
+            malformed_payload = json.dumps(
+                {
+                    "Name": "OpenAI.ChatGPT.CodexPatch",
+                    "PackageFullName": (
+                        "OpenAI.ChatGPT.CodexPatch_2.0.0.0_x64__candidate"
+                    ),
+                    "InstallLocation": str(install),
+                }
+            )
+
+            def runner(command):
+                script = command[-1]
+                if "ConvertTo-Json" in script:
+                    return completed(command, malformed_payload)
+                return completed(command)
+
+            with self.assertRaisesRegex(patcher.PatchError, "PackageFamilyName"):
+                patcher.deploy_windows_msix(candidate, paths, command_runner=runner)
+
+            self.assertFalse(paths.active.exists())

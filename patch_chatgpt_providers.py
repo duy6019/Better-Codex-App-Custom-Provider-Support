@@ -1967,6 +1967,12 @@ def _verify_windows_custom_package(
 ) -> dict[str, Any]:
     if not payload:
         raise PatchError("The custom Windows package is not registered")
+    for field in ("PackageFullName", "PackageFamilyName", "Version"):
+        value = payload.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise PatchError(
+                f"Custom Windows package registration omitted {field}"
+            )
     expected = expected_metadata or _windows_default_metadata(paths)
     custom_name = str(expected.get("custom_package_name") or _windows_custom_name(paths))
     expected_full_name = str(expected.get("custom_package_full_name") or "")
@@ -2018,6 +2024,7 @@ def _recover_windows_deployment(
     custom_full_name: str,
     had_previous: bool,
     expected_metadata: dict[str, Any] | None = None,
+    registration_attempted: bool = False,
     registration_succeeded: bool = False,
 ) -> list[str]:
     failures: list[str] = []
@@ -2046,7 +2053,19 @@ def _recover_windows_deployment(
         or candidate_expected.get("source_version")
         or ""
     )
-    if not custom_full_name and registration_succeeded:
+    candidate_identity_proven = any(
+        (
+            candidate_expected_full_name,
+            candidate_expected_family_name,
+            candidate_expected_publisher,
+            candidate_expected_version,
+        )
+    )
+    if (
+        not custom_full_name
+        and registration_attempted
+        and (registration_succeeded or candidate_identity_proven)
+    ):
         try:
             registered = _query_windows_custom_registration(
                 command_runner,
@@ -2059,8 +2078,6 @@ def _recover_windows_deployment(
             custom_full_name = str(registered.get("PackageFullName") or "")
         except Exception as exc:
             failures.append(f"establish candidate package identity: {exc}")
-    if not custom_full_name:
-        custom_full_name = str(previous_metadata.get("custom_package_full_name") or "")
     if custom_full_name:
         try:
             _run_windows_package_command(
@@ -2180,28 +2197,72 @@ def deploy_windows_msix(
     custom_full_name = ""
     expected_metadata: dict[str, Any] = {}
     candidate_identity = _windows_candidate_identity(candidate_msix, custom_name)
+    previous_metadata: dict[str, Any] = {}
     if had_previous:
-        expected_metadata.update(_windows_metadata(paths.active))
-        if candidate_identity:
-            expected_metadata.update(
-                {
-                    "candidate_package_publisher": candidate_identity.get(
-                        "custom_package_publisher", ""
-                    ),
-                    "candidate_source_version": candidate_identity.get(
-                        "source_version", ""
-                    ),
-                }
-            )
+        previous_metadata = _windows_metadata(paths.active)
+        expected_metadata.update(previous_metadata)
     else:
         expected_metadata["custom_package_name"] = custom_name
-        expected_metadata.update(candidate_identity)
-    expected_full_name = str(expected_metadata.get("custom_package_full_name") or "")
-    if expected_full_name == custom_name:
-        expected_full_name = ""
-    expected_family_name = str(expected_metadata.get("custom_package_family_name") or "")
-    expected_publisher = str(expected_metadata.get("custom_package_publisher") or "")
-    expected_version = str(expected_metadata.get("source_version") or "")
+    # Add-AppxPackage process shutdown and existing-package checks remain bound
+    # to the immutable active identity.  Verification after registration must
+    # instead use the candidate manifest's identity/version.
+    pre_add_full_name = str(
+        previous_metadata.get("custom_package_full_name") or ""
+    )
+    if pre_add_full_name == custom_name:
+        pre_add_full_name = ""
+    pre_add_family_name = str(
+        previous_metadata.get("custom_package_family_name") or ""
+    )
+    pre_add_publisher = str(
+        previous_metadata.get("custom_package_publisher") or ""
+    )
+    pre_add_version = str(previous_metadata.get("source_version") or "")
+    candidate_name = str(candidate_identity.get("custom_package_name") or custom_name)
+    candidate_publisher = str(
+        candidate_identity.get("custom_package_publisher") or ""
+    )
+    candidate_version = str(candidate_identity.get("source_version") or "")
+    candidate_full_name = str(
+        candidate_identity.get("custom_package_full_name") or ""
+    )
+    candidate_family_name = str(
+        candidate_identity.get("custom_package_family_name") or ""
+    )
+    post_expected_metadata = dict(expected_metadata)
+    post_expected_metadata.update(
+        {
+            "custom_package_name": candidate_name,
+            "custom_package_full_name": candidate_full_name,
+            "custom_package_family_name": candidate_family_name,
+            "custom_package_publisher": candidate_publisher,
+            "source_version": candidate_version,
+            "candidate_package_full_name": candidate_full_name,
+            "candidate_package_family_name": candidate_family_name,
+            "candidate_package_publisher": candidate_publisher,
+            "candidate_source_version": candidate_version,
+        }
+    )
+    if not candidate_identity:
+        post_expected_metadata = dict(expected_metadata)
+    post_expected_full_name = str(
+        post_expected_metadata.get("custom_package_full_name") or ""
+    )
+    if post_expected_full_name == custom_name:
+        post_expected_full_name = ""
+    post_expected_family_name = str(
+        post_expected_metadata.get("custom_package_family_name") or ""
+    )
+    post_expected_publisher = str(
+        post_expected_metadata.get("custom_package_publisher") or ""
+    )
+    post_expected_version = str(
+        post_expected_metadata.get("source_version") or ""
+    )
+    expected_full_name = pre_add_full_name
+    expected_family_name = pre_add_family_name
+    expected_publisher = pre_add_publisher
+    expected_version = pre_add_version
     try:
         if had_previous:
             snapshot_windows_active(paths)
@@ -2226,25 +2287,19 @@ def deploy_windows_msix(
         installed = _query_windows_custom_package(
             command_runner,
             custom_name,
-            expected_full_name=expected_full_name,
-            expected_family_name=expected_family_name,
-            expected_publisher=expected_publisher,
-            expected_version=expected_version,
+            expected_full_name=post_expected_full_name,
+            expected_family_name=post_expected_family_name,
+            expected_publisher=post_expected_publisher,
+            expected_version=post_expected_version,
         )
+        custom_full_name = str(installed.get("PackageFullName") or "")
         # The query is identity-bound in PowerShell; retain the explicit
         # Python checks as a second boundary before mutating active state.
         _verify_windows_custom_package(
             installed,
             paths,
-            expected_metadata={
-                **expected_metadata,
-                "custom_package_full_name": expected_full_name,
-                "custom_package_family_name": expected_family_name,
-                "custom_package_publisher": expected_publisher,
-                "source_version": expected_version,
-            },
+            expected_metadata=post_expected_metadata,
         )
-        custom_full_name = str(installed.get("PackageFullName") or "")
         active_metadata = {
             "custom_package_name": custom_name,
             "custom_package_full_name": custom_full_name,
@@ -2255,7 +2310,7 @@ def deploy_windows_msix(
                 installed.get("Publisher") or expected_publisher
             ),
             "store_package_full_name": _windows_store_full_name(paths),
-            "source_version": _windows_default_metadata(paths).get("source_version", ""),
+            "source_version": str(installed.get("Version") or ""),
         }
         promote_windows_active(candidate_msix, paths, metadata=active_metadata)
         if paths.previous.exists():
@@ -2270,7 +2325,8 @@ def deploy_windows_msix(
             custom_name=custom_name,
             custom_full_name=custom_full_name,
             had_previous=snapshot_created,
-            expected_metadata=expected_metadata,
+            expected_metadata=post_expected_metadata,
+            registration_attempted=registration_attempted,
             registration_succeeded=registration_succeeded,
         )
         if recovery_failures:
