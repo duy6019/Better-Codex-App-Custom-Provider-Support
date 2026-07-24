@@ -412,6 +412,17 @@ class WindowsRollbackTests(unittest.TestCase):
             paths = patcher.windows_patch_paths(Path(temporary))
             paths.active.mkdir(parents=True)
             (paths.active / "ChatGPT-CodexPatch.msix").write_bytes(b"previous")
+            (paths.active / "package.json").write_text(
+                json.dumps(
+                    {
+                        "custom_package_name": "OpenAI.ChatGPT.CodexPatch",
+                        "custom_package_full_name": (
+                            "OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__local"
+                        ),
+                    }
+                ),
+                encoding="utf-8",
+            )
             candidate = Path(temporary) / "candidate.msix"
             candidate.write_bytes(b"candidate")
             calls = []
@@ -435,6 +446,17 @@ class WindowsRollbackTests(unittest.TestCase):
             paths = patcher.windows_patch_paths(Path(temporary))
             paths.active.mkdir(parents=True)
             (paths.active / "ChatGPT-CodexPatch.msix").write_bytes(b"previous")
+            (paths.active / "package.json").write_text(
+                json.dumps(
+                    {
+                        "custom_package_name": "OpenAI.ChatGPT.CodexPatch",
+                        "custom_package_full_name": (
+                            "OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__local"
+                        ),
+                    }
+                ),
+                encoding="utf-8",
+            )
             candidate = Path(temporary) / "candidate.msix"
             candidate.write_bytes(b"candidate")
             calls = []
@@ -461,6 +483,17 @@ class WindowsRollbackTests(unittest.TestCase):
             paths.active.mkdir(parents=True)
             active_msix = paths.active / "ChatGPT-CodexPatch.msix"
             active_msix.write_bytes(b"previous")
+            (paths.active / "package.json").write_text(
+                json.dumps(
+                    {
+                        "custom_package_name": "OpenAI.ChatGPT.CodexPatch",
+                        "custom_package_full_name": (
+                            "OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__local"
+                        ),
+                    }
+                ),
+                encoding="utf-8",
+            )
             candidate = Path(temporary) / "candidate.msix"
             candidate.write_bytes(b"candidate")
             calls = []
@@ -574,6 +607,17 @@ class WindowsRollbackTests(unittest.TestCase):
             paths = patcher.windows_patch_paths(root)
             paths.active.mkdir(parents=True)
             (paths.active / "previous.msix").write_bytes(b"previous")
+            (paths.active / "package.json").write_text(
+                json.dumps(
+                    {
+                        "custom_package_name": "OpenAI.ChatGPT.CodexPatch",
+                        "custom_package_full_name": (
+                            "OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__local"
+                        ),
+                    }
+                ),
+                encoding="utf-8",
+            )
             candidate = root / "candidate.msix"
             candidate.write_bytes(b"candidate")
             installed = root / "installed-custom"
@@ -1209,3 +1253,60 @@ class WindowsRollbackTests(unittest.TestCase):
                 patcher.deploy_windows_msix(candidate, paths, command_runner=runner)
 
             self.assertFalse(paths.active.exists())
+
+    def test_upgrade_rejects_active_metadata_without_package_full_name_before_commands(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = patcher.windows_patch_paths(root)
+            paths.active.mkdir(parents=True)
+            (paths.active / "previous.msix").write_bytes(b"previous")
+            (paths.active / "package.json").write_text(
+                json.dumps({"custom_package_name": "OpenAI.ChatGPT.CodexPatch"}),
+                encoding="utf-8",
+            )
+            candidate = root / "candidate.msix"
+            candidate.write_bytes(b"candidate")
+            calls = []
+
+            with self.assertRaisesRegex(patcher.PatchError, "PackageFullName"):
+                patcher.deploy_windows_msix(
+                    candidate,
+                    paths,
+                    command_runner=lambda command: calls.append(command)
+                    or completed(command),
+                )
+
+            self.assertEqual(calls, [])
+            self.assertTrue((paths.active / "previous.msix").exists())
+            self.assertFalse(paths.previous.exists())
+
+    def test_upgrade_rejects_partial_active_package_full_name_before_commands(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = patcher.windows_patch_paths(root)
+            paths.active.mkdir(parents=True)
+            (paths.active / "previous.msix").write_bytes(b"previous")
+            (paths.active / "package.json").write_text(
+                json.dumps(
+                    {
+                        "custom_package_name": "OpenAI.ChatGPT.CodexPatch",
+                        "custom_package_full_name": "OpenAI.ChatGPT.CodexPatch",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            candidate = root / "candidate.msix"
+            candidate.write_bytes(b"candidate")
+            calls = []
+
+            with self.assertRaisesRegex(patcher.PatchError, "PackageFullName"):
+                patcher.deploy_windows_msix(
+                    candidate,
+                    paths,
+                    command_runner=lambda command: calls.append(command)
+                    or completed(command),
+                )
+
+            self.assertEqual(calls, [])
+            self.assertTrue((paths.active / "previous.msix").exists())
+            self.assertFalse(paths.previous.exists())

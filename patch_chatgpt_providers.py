@@ -1616,6 +1616,24 @@ def _windows_store_full_name(paths: WindowsPatchPaths) -> str:
     return str(_windows_default_metadata(paths)["store_package_full_name"])
 
 
+def _windows_active_custom_full_name(
+    metadata: dict[str, Any], custom_name: str
+) -> str:
+    """Return the immutable registration selector for an active artifact."""
+
+    package_full_name = metadata.get("custom_package_full_name")
+    if not isinstance(package_full_name, str):
+        raise PatchError(
+            "Windows active package metadata omitted a valid PackageFullName"
+        )
+    package_full_name = package_full_name.strip()
+    if not package_full_name or package_full_name == custom_name:
+        raise PatchError(
+            "Windows active package metadata omitted a valid PackageFullName"
+        )
+    return package_full_name
+
+
 def _windows_candidate_identity(candidate_msix: Path, custom_name: str) -> dict[str, str]:
     """Read the custom identity from a packaged MSIX when it is available.
 
@@ -2301,16 +2319,15 @@ def deploy_windows_msix(
     if had_previous:
         previous_metadata = _windows_metadata(paths.active)
         expected_metadata.update(previous_metadata)
+        pre_add_full_name = _windows_active_custom_full_name(
+            previous_metadata, custom_name
+        )
     else:
         expected_metadata["custom_package_name"] = custom_name
+        pre_add_full_name = ""
     # Add-AppxPackage process shutdown and existing-package checks remain bound
     # to the immutable active identity.  Verification after registration must
     # instead use the candidate manifest's identity/version.
-    pre_add_full_name = str(
-        previous_metadata.get("custom_package_full_name") or ""
-    )
-    if pre_add_full_name == custom_name:
-        pre_add_full_name = ""
     pre_add_family_name = str(
         previous_metadata.get("custom_package_family_name") or ""
     )
