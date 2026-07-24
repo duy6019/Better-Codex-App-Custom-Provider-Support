@@ -1,6 +1,9 @@
 # Better Codex App Custom Provider Support
 
-An unofficial patch for the macOS ChatGPT/Codex desktop app that adds per-task model-provider selection without requiring you to sign out of your ChatGPT account.
+An unofficial patch for the ChatGPT/Codex desktop app that adds per-task
+model-provider selection without requiring you to sign out of your ChatGPT
+account. It supports the macOS app bundle and the Microsoft Store installation
+on Windows.
 
 The patch:
 
@@ -9,9 +12,9 @@ The patch:
 - Keeps tasks from all configured providers visible.
 - Keeps the normal ChatGPT login active for OpenAI models.
 
-The desktop application patch is macOS-only. The standalone
-`setup_custom_provider.py` wizard supports macOS Keychain and Windows
-Credential Manager.
+On Windows, only ChatGPT installed from the Microsoft Store is supported. The
+standalone `setup_custom_provider.py` wizard supports macOS Keychain and
+Windows Credential Manager.
 
 > [!CAUTION]
 > Changing the provider in a running conversation/thread does **not** work. The conversation/thread continues using the provider it started with.
@@ -21,14 +24,26 @@ Credential Manager.
 
 ## Requirements
 
-- macOS for the desktop application patch
-- Official ChatGPT `26.721.31836`, build `5828`, installed at `/Applications/ChatGPT.app`
+### macOS
+
+- Official ChatGPT `26.721.31836`, build `5828`, installed at
+  `/Applications/ChatGPT.app`
 - Python 3.9 or newer
 - Node.js with `npx`
 - Codex CLI available as `codex`
 
-Windows is supported for the standalone `setup_custom_provider.py` wizard with
-Windows Credential Manager; it does not support the desktop application patch.
+### Windows Microsoft Store
+
+- Windows 10 version 2004 or later, or Windows 11
+- ChatGPT installed from the Microsoft Store. Other Windows distributions are
+  unsupported.
+- Python 3.9 or newer
+- Windows SDK with `MakeAppx.exe` and `SignTool.exe` available
+- An elevated PowerShell session for the first run, so the local public
+  signing certificate can be trusted and the Store payload can be read
+
+Developer Mode is not required. Organizational sideloading policy can still
+block installation of the separately signed package.
 
 ## Install
 
@@ -41,6 +56,8 @@ Windows Credential Manager; it does not support the desktop application patch.
 
 <br>
 <br>
+
+### macOS
 
 1. Download `patch_chatgpt_providers.py`, `sync_codex_models.py`,
    `setup_custom_provider.py`, and `codex_config.py` from the repository.
@@ -62,9 +79,38 @@ python3 sync_codex_models.py
 python3 setup_custom_provider.py
 ```
 
-The installer closes processes belonging to the target app, maintains a verified clean original beside it, creates a transactional snapshot before mutation, patches `app.asar`, updates Electron's ASAR integrity metadata, and applies an ad-hoc signature.
+The installer closes processes belonging to the target app, maintains a verified
+clean original beside it, creates a transactional snapshot before mutation,
+patches `app.asar`, updates Electron's ASAR integrity metadata, and applies an
+ad-hoc signature.
 
 Run `python3 patch_chatgpt_providers.py --help` to see alternate app and config paths.
+
+### Windows Microsoft Store
+
+1. Install ChatGPT from the Microsoft Store first, then install the Windows SDK
+   tools listed above.
+2. Open an elevated PowerShell session in the directory containing the scripts
+   and run:
+
+```powershell
+py patch_chatgpt_providers.py
+```
+
+3. Run the model sync script and, if needed, the provider setup wizard:
+
+```powershell
+py sync_codex_models.py
+py setup_custom_provider.py
+```
+
+The official Store app is not modified. The patcher copies and validates its
+payload, builds and signs a separate custom package, then launches that patched
+package. It stores the clean source, active package, and any recovery snapshot
+under `%LOCALAPPDATA%\Codex\ChatGPTProviderPatch`.
+
+Do not pass `--app` or `--reapply-from` on Windows: those options are for the
+macOS app-bundle flow.
 
 ## Sync Codex models
 
@@ -113,8 +159,8 @@ Windows Credential Manager. Choose `none` for endpoints that do not require
 authentication. The key is not written to `config.toml` or the provider-routing
 JSON file. The stored credential is named `codex-<provider-id>`.
 
-The wizard supports macOS and Windows. The application patch remains
-macOS-specific.
+The wizard supports macOS and Windows. The application patch supports the
+macOS bundle and the Windows Microsoft Store flow described above.
 
 The provider is added to the desktop provider menu. This wizard does not create
 model catalog entries or model routing; choose a model supported by the endpoint,
@@ -164,6 +210,8 @@ starts or forks. Repatching is not required after running either setup command.
 
 ## Updates and recovery
 
+### macOS
+
 ChatGPT updates replace the patch. This revision supports the official
 ChatGPT `26.721.31836`, build `5828`. A newer app build may change the generated
 JavaScript again; wait for a compatible patch revision before rerunning the
@@ -184,9 +232,33 @@ For the default app path, recovery files are:
 
 The installer migrates a valid legacy `~/.codex/ChatGPT-original.app` into the sibling original and deletes the legacy copy only after the new copy verifies. Existing `ChatGPT.patch-failed-*.app` bundles are not removed automatically.
 
+### Windows Microsoft Store
+
+The Store app can update independently of the custom patched package. After a
+Store update, run the patcher again to create a new patched package from the
+new Store payload. If strict validation rejects that payload, the previous
+patched package remains active and the official Store app remains unchanged.
+
+Windows transaction state lives under:
+
+```text
+%LOCALAPPDATA%\Codex\ChatGPTProviderPatch\original
+%LOCALAPPDATA%\Codex\ChatGPTProviderPatch\active
+%LOCALAPPDATA%\Codex\ChatGPTProviderPatch\previous
+```
+
+`original` is the validated, unmodified Store source. `active` is the locally
+signed patched package. `previous` is retained as recovery evidence while a
+deployment is unresolved. If the patcher reports that automatic recovery was
+intentionally refused, do not delete `previous`; resolve the reported package
+state manually, then run the patcher again.
+
 ## Disclaimer
 
-Use this script entirely at your own risk. It modifies the installed ChatGPT application in an unofficial and unsupported way.
+Use this script entirely at your own risk. On macOS it modifies the installed
+ChatGPT application in an unofficial and unsupported way. On Windows it
+installs a separate, locally signed package; the official Store app is not
+modified.
 
 The author and contributors provide no warranty and accept no responsibility or liability for any problems, damage, or loss caused directly or indirectly by using this script. This includes, but is not limited to, lost or corrupted chat history or other data, an unusable or "bricked" application, account warnings or restrictions, account suspension or banning, security or privacy issues, and any other direct or consequential damage.
 

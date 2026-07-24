@@ -1872,3 +1872,17 @@ class PlatformDispatchTests(unittest.TestCase):
         self.assertIn("Microsoft Store", help_text)
         self.assertIn("Windows SDK", help_text)
         self.assertIn("Developer Mode is not required", help_text)
+
+
+class DocumentationTests(unittest.TestCase):
+    def test_readme_documents_store_only_refresh_without_developer_mode(self):
+        readme = Path(patcher.__file__).with_name("README.md").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("Microsoft Store", readme)
+        self.assertIn("MakeAppx", readme)
+        self.assertIn("SignTool", readme)
+        self.assertIn("Developer Mode is not required", readme)
+        self.assertIn("run the patcher again", readme)
+        self.assertIn("official Store app is not modified", readme)

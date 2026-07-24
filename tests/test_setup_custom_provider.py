@@ -322,7 +322,7 @@ class DocumentationTests(unittest.TestCase):
 
         self.assertIn("Windows Credential Manager", readme)
         self.assertIn("credential-manager", readme)
-        self.assertIn("The desktop application patch is macOS-only", readme)
+        self.assertIn("Windows Microsoft Store", readme)
         self.assertIn("py setup_custom_provider.py", readme)
         self.assertNotIn("API_KEY_CUA_BAN", readme)
 
