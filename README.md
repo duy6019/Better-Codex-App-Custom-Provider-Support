@@ -20,7 +20,7 @@ This project currently supports **macOS only**.
 ## Requirements
 
 - macOS
-- ChatGPT installed at `/Applications/ChatGPT.app`
+- Official ChatGPT `26.721.30844`, build `5813`, installed at `/Applications/ChatGPT.app`
 - Python 3.9 or newer
 - Node.js with `npx`
 - Codex CLI available as `codex`
@@ -131,9 +131,14 @@ The app reloads this file when the provider menu opens and before a new task sta
 
 ## Updates and recovery
 
-ChatGPT updates replace the patch. Run the installer again after an update.
+ChatGPT updates replace the patch. This revision supports the official
+ChatGPT `26.721.30844`, build `5813`. A newer app build may change the generated
+JavaScript again; wait for a compatible patch revision before rerunning the
+installer.
 
-The installer is not tied to a fixed app version or archive hash. It patches compatible source structures and stops before modifying the installed app if an update changes the relevant code.
+The installer validates the expected bundle filename shape, source markers,
+and exact patch contexts. If an app update changes them, it stops before
+modifying the installed app.
 
 For the default app path, recovery files are:
 
