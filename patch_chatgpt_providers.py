@@ -31,6 +31,13 @@ from typing import Any, NoReturn
 PATCH_MARKER = b"__codexDesktopModelProvidersPatchV2"
 ASAR_PACKAGE = "@electron/asar@3.2.10"
 PRETTIER_PACKAGE = "prettier@3.6.2"
+BUILD_5813_BUNDLE_MARKERS = (
+    "async prewarmThreadStart(",
+    "async sendConfigReadRequest(",
+    "composer.intelligenceDropdown.tooltip",
+    "data-model-picker-model-row",
+    "vertical-scroll-fade-mask flex max-h-[250px] flex-col overflow-y-auto",
+)
 
 DEFAULT_PROVIDER_CONFIG: dict[str, Any] = {
     "version": 1,
@@ -1081,6 +1088,15 @@ def unique_candidate(
     return matches[0]
 
 
+def current_patch_bundle(assets: Path) -> Path:
+    return unique_candidate(
+        assets,
+        "app-initial-",
+        BUILD_5813_BUNDLE_MARKERS,
+        "ChatGPT 26.721.30844 build 5813 application",
+    )
+
+
 def parse_hunks(unified_diff: str) -> list[list[str]]:
     lines = unified_diff.splitlines()
     hunks: list[list[str]] = []
@@ -1123,6 +1139,30 @@ def apply_unified_diff(path: Path, unified_diff: str) -> None:
 
     result = "\n".join(source_lines) + ("\n" if had_trailing_newline else "")
     path.write_text(result, encoding="utf-8")
+
+
+def patch_current_bundle(bundle: Path) -> None:
+    run(
+        ["npx", "--yes", PRETTIER_PACKAGE, "--write", str(bundle)],
+        label="Preparing the JavaScript bundle",
+    )
+    apply_unified_diff(bundle, CENTRAL_DIFF)
+    apply_unified_diff(bundle, PICKER_DIFF)
+
+    source = bundle.read_text(encoding="utf-8")
+    if PATCH_MARKER.decode() not in source:
+        raise PatchError("Routing marker missing after patch")
+    if "CodexCustomProviderPickerSection" not in source:
+        raise PatchError("Provider picker missing after patch")
+
+    run(
+        ["npx", "--yes", PRETTIER_PACKAGE, "--write", str(bundle)],
+        label="Formatting the patched JavaScript",
+    )
+    run(
+        ["node", "--check", str(bundle)],
+        label="Validating the patched JavaScript",
+    )
 
 
 def validate_original_source(app: Path, original: Path) -> Path:
@@ -1363,49 +1403,8 @@ def build_patched_artifacts(
     if not assets.is_dir():
         raise PatchError("Extracted app has no webview/assets directory")
 
-    central = unique_candidate(
-        assets,
-        "artifact-tab-content.electron~notebook-preview-panel~app-main~business-checkout",
-        ("async prewarmThreadStart(", "async sendConfigReadRequest("),
-        "App Server client",
-    )
-    picker = unique_candidate(
-        assets,
-        "settings-command-menu-section-items~new-thread-panel-page~settings-pag",
-        ("composer.intelligenceDropdown.tooltip",),
-        "model picker",
-    )
-
-    run(
-        [
-            "npx",
-            "--yes",
-            PRETTIER_PACKAGE,
-            "--write",
-            str(central),
-            str(picker),
-        ],
-        label="Preparing the JavaScript bundles",
-    )
-    apply_unified_diff(central, CENTRAL_DIFF)
-    apply_unified_diff(picker, PICKER_DIFF)
-
-    if PATCH_MARKER.decode() not in central.read_text(encoding="utf-8"):
-        raise PatchError("Routing marker missing after patch")
-    if "CodexCustomProviderPickerSection" not in picker.read_text(encoding="utf-8"):
-        raise PatchError("Provider picker missing after patch")
-
-    run(
-        [
-            "npx",
-            "--yes",
-            PRETTIER_PACKAGE,
-            "--write",
-            str(central),
-            str(picker),
-        ],
-        label="Formatting and validating the patched JavaScript",
-    )
+    bundle = current_patch_bundle(assets)
+    patch_current_bundle(bundle)
     run(
         ["npx", "--yes", ASAR_PACKAGE, "pack", str(extracted), str(patched_asar)],
         label="Packing patched application resources",

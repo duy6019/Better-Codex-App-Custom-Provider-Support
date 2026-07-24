@@ -294,6 +294,123 @@ var PO,
         self.assertIn("(CodexProviderPatchReact = t(m(), 1))", patched)
 
 
+class CurrentBundleTests(unittest.TestCase):
+    def write_bundle(self, assets: Path, name: str, markers=()) -> Path:
+        bundle = assets / name
+        bundle.write_text("\n".join(markers), encoding="utf-8")
+        return bundle
+
+    def test_current_patch_bundle_finds_build_5813_app_initial(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            assets = Path(temporary)
+            expected = self.write_bundle(
+                assets,
+                "app-initial-BTphDPeq.js",
+                patcher.BUILD_5813_BUNDLE_MARKERS,
+            )
+            self.write_bundle(
+                assets,
+                "en-US-localization.js",
+                ("composer.intelligenceDropdown.tooltip",),
+            )
+
+            self.assertEqual(patcher.current_patch_bundle(assets), expected)
+
+    def test_current_patch_bundle_rejects_missing_build_5813_layout(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            assets = Path(temporary)
+            self.write_bundle(
+                assets,
+                "app-initial-old.js",
+                patcher.BUILD_5813_BUNDLE_MARKERS[:-1],
+            )
+
+            with self.assertRaisesRegex(
+                patcher.PatchError,
+                "found 0 out of 1 filename matches",
+            ):
+                patcher.current_patch_bundle(assets)
+
+    def test_current_patch_bundle_rejects_ambiguous_build_5813_layout(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            assets = Path(temporary)
+            for suffix in ("one", "two"):
+                self.write_bundle(
+                    assets,
+                    f"app-initial-{suffix}.js",
+                    patcher.BUILD_5813_BUNDLE_MARKERS,
+                )
+
+            with self.assertRaisesRegex(
+                patcher.PatchError,
+                "found 2 out of 2 filename matches",
+            ):
+                patcher.current_patch_bundle(assets)
+
+    def test_patch_current_bundle_applies_both_diffs_to_one_file(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            bundle = Path(temporary) / "app-initial-current.js"
+            bundle.write_text("original\n", encoding="utf-8")
+
+            def apply_marker(path, unified_diff):
+                marker = (
+                    patcher.PATCH_MARKER.decode()
+                    if unified_diff is patcher.CENTRAL_DIFF
+                    else "CodexCustomProviderPickerSection"
+                )
+                path.write_text(
+                    path.read_text(encoding="utf-8") + marker + "\n",
+                    encoding="utf-8",
+                )
+
+            with (
+                mock.patch.object(patcher, "run") as run,
+                mock.patch.object(
+                    patcher,
+                    "apply_unified_diff",
+                    side_effect=apply_marker,
+                ) as apply,
+            ):
+                patcher.patch_current_bundle(bundle)
+
+            self.assertEqual(
+                apply.call_args_list,
+                [
+                    mock.call(bundle, patcher.CENTRAL_DIFF),
+                    mock.call(bundle, patcher.PICKER_DIFF),
+                ],
+            )
+            self.assertEqual(
+                run.call_args_list,
+                [
+                    mock.call(
+                        [
+                            "npx",
+                            "--yes",
+                            patcher.PRETTIER_PACKAGE,
+                            "--write",
+                            str(bundle),
+                        ],
+                        label="Preparing the JavaScript bundle",
+                    ),
+                    mock.call(
+                        [
+                            "npx",
+                            "--yes",
+                            patcher.PRETTIER_PACKAGE,
+                            "--write",
+                            str(bundle),
+                        ],
+                        label="Formatting the patched JavaScript",
+                    ),
+                    mock.call(
+                        ["node", "--check", str(bundle)],
+                        label="Validating the patched JavaScript",
+                    ),
+                ],
+            )
+
+
 class SiblingOriginalTests(unittest.TestCase):
     def test_managed_backup_paths_are_siblings_with_non_app_suffixes(self):
         app = Path("/Applications/ChatGPT.app")
