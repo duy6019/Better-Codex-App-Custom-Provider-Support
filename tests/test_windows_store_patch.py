@@ -132,6 +132,21 @@ class WindowsPackageBuildTests(unittest.TestCase):
         self.assertIn("Cert:\\LocalMachine\\TrustedPeople", script)
         self.assertNotIn("Export-PfxCertificate", script)
 
+    def test_certificate_setup_rejects_failed_powershell_with_stale_json(self):
+        command = ["powershell.exe", "-NoProfile"]
+
+        with self.assertRaisesRegex(
+            patcher.PatchError, "Could not create or trust"
+        ):
+            patcher.windows_signing_certificate(
+                lambda _: subprocess.CompletedProcess(
+                    command,
+                    1,
+                    '{"Subject":"CN=Codex Provider Patch","Thumbprint":"ABC"}',
+                    "certificate import failed",
+                )
+            )
+
     def test_marked_original_stops_before_makeappx(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

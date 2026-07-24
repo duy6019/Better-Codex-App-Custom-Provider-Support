@@ -978,7 +978,11 @@ def windows_signing_certificate(command_runner: Any) -> WindowsSigningCertificat
     ]
     try:
         result = command_runner(command)
+        if getattr(result, "returncode", 0) != 0:
+            raise PatchError("Could not create or trust the Windows signing certificate")
         payload = json.loads(result.stdout.strip())
+    except PatchError:
+        raise
     except Exception as exc:
         raise PatchError("Could not create or trust the Windows signing certificate") from exc
 
