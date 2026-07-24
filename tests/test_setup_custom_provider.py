@@ -114,8 +114,8 @@ args = ["find-generic-password"]
         self.assertTrue(command[4].endswith("\n}"))
         self.assertEqual(command[5:], [])
 
-    def test_store_windows_api_key_passes_special_key_only_via_stdin(self):
-        api_key = "test key & value"
+    def test_store_windows_api_key_passes_non_ascii_key_as_base64_stdin(self):
+        api_key = "test key & ค่า"
         encoded_key = base64.b64encode(api_key.encode("utf-16le")).decode("ascii")
         runner = mock.Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
 
@@ -128,8 +128,9 @@ args = ["find-generic-password"]
         self.assertNotIn(api_key, command[4])
         self.assertNotIn(encoded_key, command[4])
         self.assertIn("[Console]::In.ReadToEnd()", command[4])
-        self.assertNotIn("FromBase64String", command[4])
-        self.assertEqual(runner.call_args.kwargs["input"], api_key)
+        self.assertIn("[Convert]::FromBase64String", command[4])
+        self.assertTrue(encoded_key.isascii())
+        self.assertEqual(runner.call_args.kwargs["input"], encoded_key)
 
     def test_setup_provider_does_not_store_key_for_no_auth(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 from dataclasses import dataclass
 import getpass
 import json
@@ -157,7 +158,7 @@ def windows_credential_write_script(target_name: str, username: str) -> str:
     script = r'''& {
 $target = __TARGET__
 $username = __USERNAME__
-$apiKey = [Console]::In.ReadToEnd()
+$encodedKey = [Console]::In.ReadToEnd()
 $source = @'
 using System;
 using System.Runtime.InteropServices;
@@ -180,7 +181,7 @@ $blob = [IntPtr]::Zero
 try {
   $targetPointer = [Runtime.InteropServices.Marshal]::StringToCoTaskMemUni($target)
   $usernamePointer = [Runtime.InteropServices.Marshal]::StringToCoTaskMemUni($username)
-  $bytes = [Text.Encoding]::Unicode.GetBytes($apiKey)
+  $bytes = [Convert]::FromBase64String($encodedKey)
   $blob = [Runtime.InteropServices.Marshal]::AllocCoTaskMem($bytes.Length)
   [Runtime.InteropServices.Marshal]::Copy($bytes, 0, $blob, $bytes.Length)
   $entry = New-Object CredentialManager+CREDENTIAL
@@ -194,6 +195,7 @@ try {
     for ($index = 0; $index -lt $bytes.Length; $index++) { [Runtime.InteropServices.Marshal]::WriteByte($blob, $index, 0) }
     [Runtime.InteropServices.Marshal]::FreeCoTaskMem($blob)
   }
+  if ($null -ne $bytes) { [Array]::Clear($bytes, 0, $bytes.Length) }
 }
 }'''
     return (
@@ -289,6 +291,7 @@ def store_api_key(
         store_keychain_api_key(provider_id, api_key, command_runner=command_runner)
         return
     if auth_method == "credential-manager":
+        encoded_key = base64.b64encode(api_key.encode("utf-16le")).decode("ascii")
         command = [
             "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
             windows_credential_write_script(keychain_service(provider_id), provider_id),
@@ -296,7 +299,7 @@ def store_api_key(
         try:
             command_runner(
                 command,
-                input=api_key,
+                input=encoded_key,
                 check=True,
                 text=True,
                 stdout=subprocess.PIPE,
