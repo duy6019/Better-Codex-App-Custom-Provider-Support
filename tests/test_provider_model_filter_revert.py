@@ -20,6 +20,15 @@ FILTER_MARKERS = (
 
 
 class ProviderModelFilterRevertTests(unittest.TestCase):
+    def test_readme_targets_only_chatgpt_build_5828(self):
+        readme = Path(patcher.__file__).with_name("README.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("26.721.31836", readme)
+        self.assertIn("build `5828`", readme)
+        self.assertNotIn("26.721.30844", readme)
+        self.assertNotIn("build `5813`", readme)
+
     def test_provider_selection_routes_requests_without_filtering_models(self):
         self.assertIn(
             "function CodexCustomProviderPickerSection()",

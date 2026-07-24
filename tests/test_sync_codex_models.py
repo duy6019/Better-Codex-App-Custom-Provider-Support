@@ -233,8 +233,13 @@ class PatcherTemplateTests(unittest.TestCase):
         ):
             patcher.parse_args()
 
-        self.assertIn("explicit provider selector", output.getvalue())
-        self.assertNotIn("per-model provider routing", output.getvalue())
+        help_text = output.getvalue()
+        self.assertIn("explicit provider selector", help_text)
+        self.assertIn("26.721.31836", help_text)
+        self.assertIn("build 5828", help_text)
+        self.assertNotIn("26.721.30844", help_text)
+        self.assertNotIn("build 5813", help_text)
+        self.assertNotIn("per-model provider routing", help_text)
 
     def test_installer_has_no_persistent_backup_directory_option(self):
         output = io.StringIO()

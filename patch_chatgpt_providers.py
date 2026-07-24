@@ -772,7 +772,10 @@ def managed_backup_paths(app: Path) -> tuple[Path, Path]:
 def parse_args() -> argparse.Namespace:
     codex_home = effective_codex_home()
     parser = FancyArgumentParser(
-        description="Add an explicit provider selector to the macOS ChatGPT/Codex desktop app."
+        description=(
+            "Add an explicit provider selector to the macOS ChatGPT/Codex desktop app. "
+            "Supports ChatGPT 26.721.31836 build 5828."
+        )
     )
     parser.add_argument(
         "--app",
