@@ -37,7 +37,7 @@ This project currently supports **macOS only**.
 <br>
 <br>
 
-1. Download both `patch_chatgpt_providers.py` and `sync_codex_models.py` from the repository.
+1. Download `patch_chatgpt_providers.py`, `sync_codex_models.py`, and `setup_custom_provider.py` from the repository.
 2. Run the patch script:
 
 ```bash
@@ -85,6 +85,26 @@ The script preserves all other TOML settings, including project configuration an
 Use `--catalog`, `--provider-config`, and `--config` to target alternate paths, or `--codex-bin` when the Codex CLI has a different executable name. Run `python3 sync_codex_models.py --help` for details.
 
 Restart ChatGPT/Codex after synchronization so it loads the new model catalog. Do not set a global `model_provider` if OpenAI and 9router should coexist in the desktop app; choose the provider from the menu before each new task or Side Chat fork.
+
+## Add a custom provider
+
+Use the separate setup wizard to add or update one provider without editing
+Codex configuration files manually:
+
+```bash
+python3 setup_custom_provider.py
+```
+
+The wizard asks for the provider ID, display name, base URL, wire API, and
+authentication mode. Choose `keychain` to store the API key in macOS Keychain
+under `codex-<provider-id>`; choose `none` for endpoints that do not require
+authentication. The key is not written to `config.toml` or the provider-routing
+JSON file.
+
+The provider is added to the desktop provider menu. This wizard does not create
+model catalog entries or model routing; choose a model supported by the endpoint,
+then select the provider before starting a new task. Run the script again to
+update that provider or add another provider.
 
 ## Configure the patched provider menu
 

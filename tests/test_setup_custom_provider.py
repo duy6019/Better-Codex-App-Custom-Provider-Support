@@ -181,3 +181,14 @@ class InteractiveSetupTests(unittest.TestCase):
             routing = json.loads(routing_path.read_text(encoding="utf-8"))
             self.assertEqual(routing["model_providers"], {"keep/model": "keep"})
             self.assertEqual(routing["providers"][-1]["id"], "acme")
+
+
+class DocumentationTests(unittest.TestCase):
+    def test_readme_documents_custom_provider_setup_without_a_literal_key(self):
+        readme = (Path(__file__).parents[1] / "README.md").read_text(encoding="utf-8")
+        normalized_readme = " ".join(readme.split())
+
+        self.assertIn("python3 setup_custom_provider.py", readme)
+        self.assertIn("codex-<provider-id>", readme)
+        self.assertIn("does not create model catalog entries", normalized_readme)
+        self.assertNotIn("API_KEY_CUA_BAN", readme)
