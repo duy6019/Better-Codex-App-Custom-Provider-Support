@@ -1771,6 +1771,8 @@ def _windows_registration_match_lines(
         )
     return [
         f"$packages = @(Get-AppxPackage -Name '{escaped_name}')",
+        "if ($packages.Count -ne 1) { "
+        "throw 'Expected exactly one custom package registration' }",
         "$customMatches = @($packages | Where-Object {",
         "  " + " -and ".join(conditions),
         "})",
@@ -1811,10 +1813,6 @@ def _windows_add_script(
                 expected_publisher=expected_publisher,
                 expected_version=expected_version,
             )
-        )
-        lines.append(
-            "if ($packages.Count -ne 1) { "
-            "throw 'Unexpected additional custom package registration' }"
         )
     if not allow_running:
         lines.extend(
@@ -2187,63 +2185,26 @@ def _recover_windows_deployment(
     custom_name: str,
     custom_full_name: str,
     had_previous: bool,
-    expected_metadata: dict[str, Any] | None = None,
     preexisting_candidate_full_names: set[str] | None = None,
-    registration_attempted: bool = False,
-    registration_succeeded: bool = False,
 ) -> list[str]:
     failures: list[str] = []
-    candidate_expected = dict(expected_metadata or {})
     previous_metadata: dict[str, Any] = {}
     if had_previous and paths.previous.exists():
         try:
             previous_metadata = _windows_metadata(paths.previous)
         except Exception as exc:
             failures.append(f"read previous metadata: {exc}")
-    candidate_expected_full_name = str(
-        candidate_expected.get("candidate_package_full_name") or ""
-    )
-    candidate_expected_family_name = str(
-        candidate_expected.get("candidate_package_family_name")
-        or candidate_expected.get("custom_package_family_name")
-        or ""
-    )
-    candidate_expected_publisher = str(
-        candidate_expected.get("candidate_package_publisher")
-        or candidate_expected.get("custom_package_publisher")
-        or ""
-    )
-    candidate_expected_version = str(
-        candidate_expected.get("candidate_source_version")
-        or candidate_expected.get("source_version")
-        or ""
-    )
-    candidate_identity_proven = any(
-        (
-            candidate_expected_full_name,
-            candidate_expected_family_name,
-            candidate_expected_publisher,
-            candidate_expected_version,
+    candidate_removed = False
+    preexisting_full_names = preexisting_candidate_full_names or set()
+    if not custom_full_name:
+        failures.append(
+            "candidate registration is ambiguous; refusing automatic removal"
         )
-    )
-    if (
-        not custom_full_name
-        and registration_attempted
-        and (registration_succeeded or candidate_identity_proven)
-    ):
-        try:
-            registered = _query_windows_custom_registration(
-                command_runner,
-                custom_name,
-                expected_full_name=candidate_expected_full_name,
-                expected_family_name=candidate_expected_family_name,
-                expected_publisher=candidate_expected_publisher,
-                expected_version=candidate_expected_version,
-            )
-            custom_full_name = str(registered.get("PackageFullName") or "")
-        except Exception as exc:
-            failures.append(f"establish candidate package identity: {exc}")
-    if custom_full_name and custom_full_name not in (preexisting_candidate_full_names or set()):
+    elif custom_full_name in preexisting_full_names:
+        failures.append(
+            "candidate registration predates deployment; refusing automatic removal"
+        )
+    else:
         try:
             _run_windows_package_command(
                 command_runner,
@@ -2251,10 +2212,13 @@ def _recover_windows_deployment(
                     _windows_remove_script(custom_name, custom_full_name)
                 ),
             )
+            candidate_removed = True
         except Exception as exc:
             failures.append(f"remove custom package: {exc}")
 
     if had_previous:
+        if not candidate_removed:
+            return failures
         previous_msix: Path | None = None
         try:
             previous_msix = _windows_active_msix(paths.previous)
@@ -2277,15 +2241,12 @@ def _recover_windows_deployment(
                 failures.append(f"reinstall previous package: {exc}")
             try:
                 rollback_expected = dict(previous_metadata)
-                # The rollback package can legitimately be re-registered with
-                # a platform-generated full name after Add-AppxPackage. The
-                # immutable active full name remains the removal/process
-                # selector, while rollback verification checks the package
-                # family/name/version and marker.
-                rollback_expected.pop("custom_package_full_name", None)
                 payload = _query_windows_custom_package(
                     command_runner,
                     custom_name,
+                    expected_full_name=str(
+                        rollback_expected.get("custom_package_full_name") or ""
+                    ),
                     expected_family_name=str(
                         rollback_expected.get("custom_package_family_name") or ""
                     ),
@@ -2342,7 +2303,6 @@ def deploy_windows_msix(
     had_previous = paths.active.exists()
     snapshot_created = False
     registration_attempted = False
-    registration_succeeded = False
     preexisting_candidate_full_names: set[str] = set()
     custom_name = _windows_custom_name(paths)
     custom_full_name = ""
@@ -2442,7 +2402,20 @@ def deploy_windows_msix(
         )
         registration_attempted = True
         _run_windows_package_command(command_runner, add_command)
-        registration_succeeded = True
+
+        # Establish the candidate's exact registration identity before the
+        # marker-bearing verification.  If Add-AppxPackage itself throws,
+        # the transaction has no trustworthy proof of what (if anything) it
+        # registered and recovery must leave the package alone.
+        registered = _query_windows_custom_registration(
+            command_runner,
+            custom_name,
+            expected_full_name=post_expected_full_name,
+            expected_family_name=post_expected_family_name,
+            expected_publisher=post_expected_publisher,
+            expected_version=post_expected_version,
+        )
+        custom_full_name = str(registered.get("PackageFullName") or "")
 
         installed = _query_windows_custom_package(
             command_runner,
@@ -2452,7 +2425,6 @@ def deploy_windows_msix(
             expected_publisher=post_expected_publisher,
             expected_version=post_expected_version,
         )
-        custom_full_name = str(installed.get("PackageFullName") or "")
         # The query is identity-bound in PowerShell; retain the explicit
         # Python checks as a second boundary before mutating active state.
         _verify_windows_custom_package(
@@ -2490,16 +2462,18 @@ def deploy_windows_msix(
                         f"{previous_location}"
                     ) from exc
             raise
+        if not snapshot_created and not custom_full_name:
+            # With no prior active artifact, a successful Add followed by an
+            # absent registration is not evidence that any package remains.
+            # Do not infer an identity and risk deleting another package.
+            raise
         recovery_failures = _recover_windows_deployment(
             paths,
             command_runner,
             custom_name=custom_name,
             custom_full_name=custom_full_name,
             had_previous=snapshot_created,
-            expected_metadata=post_expected_metadata,
             preexisting_candidate_full_names=preexisting_candidate_full_names,
-            registration_attempted=registration_attempted,
-            registration_succeeded=registration_succeeded,
         )
         if recovery_failures:
             previous_location = paths.previous.resolve()

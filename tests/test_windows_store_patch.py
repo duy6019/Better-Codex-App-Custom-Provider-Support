@@ -366,7 +366,7 @@ class WindowsRollbackTests(unittest.TestCase):
             candidate = root / "candidate.msix"
             candidate.write_bytes(b"candidate")
 
-            with self.assertRaisesRegex(patcher.PatchError, "not registered"):
+            with self.assertRaisesRegex(patcher.PatchError, "registration was not found"):
                 patcher.deploy_windows_msix(
                     candidate,
                     paths,
@@ -407,9 +407,10 @@ class WindowsRollbackTests(unittest.TestCase):
                 and patcher.PATCH_MARKER.decode() in command[-1]
             )
             self.assertIn("Get-AppxPackage", verification_script)
+            self.assertIn("if ($packages.Count -ne 1)", verification_script)
             self.assertIn(patcher.PATCH_MARKER.decode(), verification_script)
 
-    def test_failed_deployment_reinstalls_previous_and_retains_snapshot(self):
+    def test_unverified_failed_deployment_retains_previous_snapshot(self):
         with tempfile.TemporaryDirectory() as temporary:
             paths = patcher.windows_patch_paths(Path(temporary))
             paths.active.mkdir(parents=True)
@@ -447,6 +448,68 @@ class WindowsRollbackTests(unittest.TestCase):
 
             self.assertTrue(paths.previous.exists())
             self.assertTrue(any("Add-AppxPackage" in command[-1] for command in calls[1:]))
+
+    def test_ambiguous_add_failure_preserves_snapshot_without_removing_package(self):
+        """A registration that appears after the baseline is not ours to remove."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = patcher.windows_patch_paths(root)
+            previous_full_name = (
+                "OpenAI.ChatGPT.CodexPatch_1.0.0.0_x64__8wekyb3d8bbwe"
+            )
+            paths.active.mkdir(parents=True)
+            (paths.active / "previous.msix").write_bytes(b"previous")
+            (paths.active / "package.json").write_text(
+                json.dumps(
+                    {
+                        "custom_package_name": "OpenAI.ChatGPT.CodexPatch",
+                        "custom_package_full_name": previous_full_name,
+                        "custom_package_family_name": (
+                            "OpenAI.ChatGPT.CodexPatch_8wekyb3d8bbwe"
+                        ),
+                        "custom_package_publisher": "CN=Previous",
+                        "source_version": "1.0.0.0",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            candidate = root / "candidate.msix"
+            with zipfile.ZipFile(candidate, "w") as package:
+                package.writestr(
+                    "AppxManifest.xml",
+                    '<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">'
+                    '<Identity Name="OpenAI.ChatGPT.CodexPatch" '
+                    'Publisher="CN=Candidate" Version="2.0.0.0" />'
+                    "</Package>",
+                )
+            calls = []
+
+            def runner(command):
+                script = command[-1]
+                calls.append(script)
+                if "Select-Object -ExpandProperty PackageFullName" in script:
+                    return completed(command, "[]")
+                if "Add-AppxPackage" in script and "previous.msix" not in script:
+                    # This models a same-name registration appearing after the
+                    # baseline but before PowerShell reaches Add-AppxPackage.
+                    raise patcher.PatchError("unmanaged package is already registered")
+                return completed(command)
+
+            with self.assertRaisesRegex(
+                patcher.PatchError, "candidate registration is ambiguous"
+            ):
+                patcher.deploy_windows_msix(
+                    candidate, paths, command_runner=runner
+                )
+
+            self.assertFalse(any("Remove-AppxPackage" in script for script in calls))
+            self.assertFalse(
+                any(
+                    "Add-AppxPackage" in script and "previous.msix" in script
+                    for script in calls
+                )
+            )
+            self.assertTrue(paths.previous.exists())
 
     def test_unusable_rollback_artifact_reports_and_preserves_previous_path(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -664,30 +727,39 @@ class WindowsRollbackTests(unittest.TestCase):
                 }
             )
             calls = []
-            add_calls = 0
 
             def runner(command):
-                nonlocal add_calls
                 calls.append(command)
                 if "Select-Object -ExpandProperty PackageFullName" in command[-1]:
                     return completed(command, "[]")
-                if "Add-AppxPackage" in command[-1]:
-                    add_calls += 1
-                    if add_calls == 1:
-                        raise patcher.PatchError("deployment failed")
                 if "ConvertTo-Json" in command[-1]:
                     return completed(command, payload)
                 return completed(command)
 
-            with self.assertRaisesRegex(patcher.PatchError, "deployment failed"):
-                patcher.deploy_windows_msix(
-                    candidate, paths, command_runner=runner
-                )
+            with mock.patch.object(
+                patcher,
+                "promote_windows_active",
+                side_effect=patcher.PatchError("deployment failed"),
+            ):
+                with self.assertRaisesRegex(patcher.PatchError, "deployment failed"):
+                    patcher.deploy_windows_msix(
+                        candidate, paths, command_runner=runner
+                    )
 
             self.assertEqual(
                 (paths.active / "previous.msix").read_bytes(), b"previous"
             )
             self.assertFalse(paths.previous.exists())
+            rollback_verification = next(
+                command[-1]
+                for command in reversed(calls)
+                if "ConvertTo-Json" in command[-1]
+            )
+            self.assertIn(
+                "PackageFullName -eq "
+                "'OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__8wekyb3d8bbwe'",
+                rollback_verification,
+            )
 
     def test_recovery_add_requires_empty_custom_registration_not_removed_previous(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -780,7 +852,7 @@ class WindowsRollbackTests(unittest.TestCase):
                         return completed(command)
                     registrations.discard(old_full_name)
                     registrations.add(candidate_full_name)
-                    raise patcher.PatchError("deployment failed")
+                    return completed(command)
                 if "ConvertTo-Json" in script:
                     if "Version.ToString() -eq '2.0.0.0'" in script:
                         if candidate_full_name not in registrations:
@@ -809,12 +881,17 @@ class WindowsRollbackTests(unittest.TestCase):
                     )
                 return completed(command)
 
-            with self.assertRaisesRegex(patcher.PatchError, "^deployment failed$"):
-                patcher.deploy_windows_msix(
-                    candidate,
-                    paths,
-                    command_runner=runner,
-                )
+            with mock.patch.object(
+                patcher,
+                "promote_windows_active",
+                side_effect=patcher.PatchError("deployment failed"),
+            ):
+                with self.assertRaisesRegex(patcher.PatchError, "^deployment failed$"):
+                    patcher.deploy_windows_msix(
+                        candidate,
+                        paths,
+                        command_runner=runner,
+                    )
 
             rollback_script = next(
                 script for script in add_scripts if "previous.msix" in script
@@ -835,6 +912,7 @@ class WindowsRollbackTests(unittest.TestCase):
                 "OpenAI.ChatGPT.CodexPatch_2.0.0.0_x64__8wekyb3d8bbwe"
             )
             family_name = "OpenAI.ChatGPT.CodexPatch_8wekyb3d8bbwe"
+            candidate_family_name = "OpenAI.ChatGPT.CodexPatch_candidate"
             paths.active.mkdir(parents=True)
             (paths.active / "previous.msix").write_bytes(b"previous")
             (paths.active / "package.json").write_text(
@@ -850,7 +928,14 @@ class WindowsRollbackTests(unittest.TestCase):
                 encoding="utf-8",
             )
             candidate = root / "candidate.msix"
-            candidate.write_bytes(b"candidate")
+            with zipfile.ZipFile(candidate, "w") as package:
+                package.writestr(
+                    "AppxManifest.xml",
+                    '<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">'
+                    '<Identity Name="OpenAI.ChatGPT.CodexPatch" '
+                    'Publisher="CN=Candidate" Version="2.0.0.0" />'
+                    "</Package>",
+                )
             installed = root / "installed-candidate"
             (installed / "resources").mkdir(parents=True)
             (installed / "resources" / "app.asar").write_bytes(
@@ -860,9 +945,9 @@ class WindowsRollbackTests(unittest.TestCase):
                 {
                     "Name": "OpenAI.ChatGPT.CodexPatch",
                     "PackageFullName": candidate_full_name,
-                    "PackageFamilyName": family_name,
-                    "Publisher": "CN=Previous",
-                    "Version": "1.0.0.0",
+                    "PackageFamilyName": candidate_family_name,
+                    "Publisher": "CN=Candidate",
+                    "Version": "2.0.0.0",
                     "InstallLocation": str(installed),
                 }
             )
@@ -947,25 +1032,23 @@ class WindowsRollbackTests(unittest.TestCase):
             candidate.write_bytes(b"candidate")
             payload = self._installed_payload(root, version="1.0.0.0")
             calls = []
-            add_calls = 0
-
             def runner(command):
-                nonlocal add_calls
                 calls.append(command)
                 if "Select-Object -ExpandProperty PackageFullName" in command[-1]:
                     return completed(command, "[]")
-                if "Add-AppxPackage" in command[-1]:
-                    add_calls += 1
-                    if add_calls == 1:
-                        raise patcher.PatchError("deployment failed")
                 if "ConvertTo-Json" in command[-1]:
                     return completed(command, payload)
                 return completed(command)
 
-            with self.assertRaisesRegex(patcher.PatchError, "^deployment failed$"):
-                patcher.deploy_windows_msix(
-                    candidate, paths, command_runner=runner
-                )
+            with mock.patch.object(
+                patcher,
+                "promote_windows_active",
+                side_effect=patcher.PatchError("deployment failed"),
+            ):
+                with self.assertRaisesRegex(patcher.PatchError, "^deployment failed$"):
+                    patcher.deploy_windows_msix(
+                        candidate, paths, command_runner=runner
+                    )
 
             self.assertFalse(paths.previous.exists())
             self.assertEqual(
@@ -1408,7 +1491,7 @@ class WindowsRollbackTests(unittest.TestCase):
             self.assertEqual(metadata["custom_package_publisher"], "CN=New Patch")
             self.assertEqual(metadata["source_version"], "2.0.0.0")
 
-    def test_add_failure_after_registration_discovers_and_removes_exact_candidate(self):
+    def test_unverified_add_failure_never_removes_candidate(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             paths = patcher.windows_patch_paths(root)
@@ -1447,8 +1530,6 @@ class WindowsRollbackTests(unittest.TestCase):
                 if "Add-AppxPackage" in script:
                     raise patcher.PatchError("Add-AppxPackage failed after registration")
                 if "ConvertTo-Json" in script:
-                    # Cleanup must use the marker-free registration query.
-                    self.assertNotIn(patcher.PATCH_MARKER.decode(), script)
                     return completed(command, payload)
                 return completed(command)
 
@@ -1458,11 +1539,7 @@ class WindowsRollbackTests(unittest.TestCase):
                 patcher.deploy_windows_msix(candidate, paths, command_runner=runner)
 
             remove_scripts = [script for script in scripts if "Remove-AppxPackage" in script]
-            self.assertEqual(len(remove_scripts), 1)
-            self.assertIn(
-                f"PackageFullName -eq '{package_full_name}'",
-                remove_scripts[0],
-            )
+            self.assertEqual(remove_scripts, [])
             self.assertFalse(paths.active.exists())
 
     def test_registration_verification_rejects_missing_identity_fields(self):
