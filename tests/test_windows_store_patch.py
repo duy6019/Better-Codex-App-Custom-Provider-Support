@@ -1,5 +1,8 @@
+import hashlib
 import json
 from pathlib import Path
+import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -217,3 +220,546 @@ class WindowsPackageBuildTests(unittest.TestCase):
             [str(tools.signtool), "sign", "/fd", "SHA256", "/sha1", "thumbprint", "/s", "My", str(root / "work" / "ChatGPT-CodexPatch.msix")],
             [str(tools.signtool), "verify", "/pa", "/v", str(root / "work" / "ChatGPT-CodexPatch.msix")],
         ])
+
+
+class WindowsRollbackTests(unittest.TestCase):
+    def _store_package(self, root, *, asar=b"clean", package_full_name=None):
+        install = root / "store"
+        (install / "resources").mkdir(parents=True)
+        (install / "resources" / "app.asar").write_bytes(asar)
+        (install / "AppxManifest.xml").write_text(
+            '<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">'
+            '<Identity Name="OpenAI.ChatGPT" Publisher="CN=Store" Version="1.2.3.4" />'
+            "</Package>",
+            encoding="utf-8",
+        )
+        return patcher.WindowsStorePackage(
+            "OpenAI.ChatGPT",
+            package_full_name
+            or "OpenAI.ChatGPT_1.2.3.4_x64__8wekyb3d8bbwe",
+            "OpenAI.ChatGPT_8wekyb3d8bbwe",
+            "1.2.3.4",
+            "X64",
+            install,
+            install / "AppxManifest.xml",
+            install / "resources" / "app.asar",
+        )
+
+    def _installed_payload(self, root, *, version="1.2.3.4"):
+        install = root / f"installed-{version}"
+        (install / "resources").mkdir(parents=True)
+        (install / "resources" / "app.asar").write_bytes(patcher.PATCH_MARKER)
+        return json.dumps(
+            {
+                "Name": "OpenAI.ChatGPT.CodexPatch",
+                "PackageFullName": f"OpenAI.ChatGPT.CodexPatch_{version}_x64__local",
+                "PackageFamilyName": "OpenAI.ChatGPT.CodexPatch_local",
+                "Version": version,
+                "InstallLocation": str(install),
+            }
+        )
+
+    def test_ensure_windows_original_replaces_only_after_clean_validation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = self._store_package(root)
+            paths = patcher.windows_patch_paths(root)
+            paths.original.mkdir(parents=True)
+            (paths.original / "sentinel").write_text("old", encoding="utf-8")
+            (paths.active / "ChatGPT-CodexPatch.msix").parent.mkdir(parents=True)
+            (paths.active / "ChatGPT-CodexPatch.msix").write_bytes(b"active")
+            with mock.patch.object(
+                patcher, "current_patch_bundle", return_value=Path("bundle.js")
+            ):
+                result = patcher.ensure_windows_original(
+                    package,
+                    paths,
+                    command_runner=lambda command: completed(command),
+                )
+            self.assertEqual(result, paths.original)
+            self.assertFalse((paths.original / "sentinel").exists())
+            original_metadata = json.loads(
+                (paths.original / "package.json").read_text()
+            )
+            self.assertEqual(
+                original_metadata["store_package_full_name"],
+                package.package_full_name,
+            )
+            self.assertEqual(original_metadata["source_version"], package.version)
+            self.assertEqual(
+                (paths.active / "ChatGPT-CodexPatch.msix").read_bytes(), b"active"
+            )
+
+    def test_ensure_windows_original_rejects_marked_source_without_touching_active(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = self._store_package(root, asar=patcher.PATCH_MARKER)
+            paths = patcher.windows_patch_paths(root)
+            paths.original.mkdir(parents=True)
+            (paths.original / "sentinel").write_text("old", encoding="utf-8")
+            (paths.active / "ChatGPT-CodexPatch.msix").parent.mkdir(parents=True)
+            (paths.active / "ChatGPT-CodexPatch.msix").write_bytes(b"active")
+            with self.assertRaisesRegex(patcher.PatchError, "already patched"):
+                patcher.ensure_windows_original(package, paths)
+            self.assertEqual(
+                (paths.original / "sentinel").read_text(encoding="utf-8"), "old"
+            )
+            self.assertEqual(
+                (paths.active / "ChatGPT-CodexPatch.msix").read_bytes(), b"active"
+            )
+
+    def test_ensure_windows_original_rejects_unsupported_extracted_source(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = self._store_package(root)
+            paths = patcher.windows_patch_paths(root)
+            paths.original.mkdir(parents=True)
+            (paths.original / "sentinel").write_text("old", encoding="utf-8")
+            (paths.active / "ChatGPT-CodexPatch.msix").parent.mkdir(parents=True)
+            (paths.active / "ChatGPT-CodexPatch.msix").write_bytes(b"active")
+
+            def runner(command):
+                extracted = Path(command[-1])
+                assets = extracted / "webview" / "assets"
+                assets.mkdir(parents=True)
+                (assets / "app-initial-unsupported.js").write_text(
+                    "unsupported", encoding="utf-8"
+                )
+                return completed(command)
+
+            with self.assertRaisesRegex(patcher.PatchError, "Expected exactly one"):
+                patcher.ensure_windows_original(
+                    package, paths, command_runner=runner
+                )
+            self.assertTrue((paths.original / "sentinel").exists())
+            self.assertEqual(
+                (paths.active / "ChatGPT-CodexPatch.msix").read_bytes(), b"active"
+            )
+
+    def test_success_promotes_candidate_and_removes_previous(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = patcher.windows_patch_paths(root)
+            candidate = root / "candidate.msix"
+            candidate.write_bytes(b"new")
+            payload = self._installed_payload(root)
+            patcher.deploy_windows_msix(
+                candidate,
+                paths,
+                command_runner=lambda command: completed(
+                    command, payload if "ConvertTo-Json" in command[-1] else ""
+                ),
+            )
+            self.assertEqual((paths.active / candidate.name).read_bytes(), b"new")
+            self.assertFalse(paths.previous.exists())
+
+    def test_empty_registration_verification_never_promotes_candidate(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = patcher.windows_patch_paths(root)
+            candidate = root / "candidate.msix"
+            candidate.write_bytes(b"candidate")
+
+            with self.assertRaisesRegex(patcher.PatchError, "not registered"):
+                patcher.deploy_windows_msix(
+                    candidate,
+                    paths,
+                    command_runner=lambda command: completed(command),
+                )
+
+            self.assertFalse(paths.active.exists())
+
+    def test_deployment_filters_custom_processes_and_verifies_installed_marker(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            paths = patcher.windows_patch_paths(Path(temporary))
+            candidate = Path(temporary) / "candidate.msix"
+            candidate.write_bytes(b"new")
+            calls = []
+            payload = self._installed_payload(Path(temporary))
+
+            patcher.deploy_windows_msix(
+                candidate,
+                paths,
+                command_runner=lambda command: calls.append(command)
+                or completed(
+                    command, payload if "ConvertTo-Json" in command[-1] else ""
+                ),
+            )
+
+            install_script = calls[0][-1]
+            self.assertIn("OpenAI.ChatGPT.CodexPatch", install_script)
+            self.assertLess(
+                install_script.index("ExecutablePath.StartsWith"),
+                install_script.index("Add-AppxPackage"),
+            )
+            verification_script = calls[1][-1]
+            self.assertIn("Get-AppxPackage", verification_script)
+            self.assertIn(patcher.PATCH_MARKER.decode(), verification_script)
+
+    def test_failed_deployment_reinstalls_previous_and_retains_snapshot(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            paths = patcher.windows_patch_paths(Path(temporary))
+            paths.active.mkdir(parents=True)
+            (paths.active / "ChatGPT-CodexPatch.msix").write_bytes(b"previous")
+            candidate = Path(temporary) / "candidate.msix"
+            candidate.write_bytes(b"candidate")
+            calls = []
+
+            def runner(command):
+                calls.append(command)
+                if "Add-AppxPackage" in command[-1] and len(calls) == 1:
+                    raise patcher.PatchError("deployment failed")
+                return completed(command)
+
+            with self.assertRaisesRegex(patcher.PatchError, "deployment failed"):
+                patcher.deploy_windows_msix(candidate, paths, command_runner=runner)
+
+            self.assertTrue(paths.previous.exists())
+            self.assertTrue(any("Add-AppxPackage" in command[-1] for command in calls[1:]))
+
+    def test_unusable_rollback_artifact_reports_and_preserves_previous_path(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            paths = patcher.windows_patch_paths(Path(temporary))
+            paths.active.mkdir(parents=True)
+            (paths.active / "ChatGPT-CodexPatch.msix").write_bytes(b"previous")
+            candidate = Path(temporary) / "candidate.msix"
+            candidate.write_bytes(b"candidate")
+            calls = []
+
+            def runner(command):
+                calls.append(command)
+                if "Add-AppxPackage" in command[-1] and len(calls) == 1:
+                    (paths.previous / "ChatGPT-CodexPatch.msix").unlink()
+                    raise patcher.PatchError("deployment failed")
+                return completed(command)
+
+            with self.assertRaisesRegex(
+                patcher.PatchError, re.escape(str(paths.previous.resolve()))
+            ):
+                patcher.deploy_windows_msix(candidate, paths, command_runner=runner)
+
+            self.assertTrue(paths.previous.exists())
+
+    def test_missing_snapshot_during_recovery_does_not_delete_prior_active(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            paths = patcher.windows_patch_paths(Path(temporary))
+            paths.active.mkdir(parents=True)
+            active_msix = paths.active / "ChatGPT-CodexPatch.msix"
+            active_msix.write_bytes(b"previous")
+            candidate = Path(temporary) / "candidate.msix"
+            candidate.write_bytes(b"candidate")
+            calls = []
+
+            def runner(command):
+                calls.append(command)
+                if "Add-AppxPackage" in command[-1] and len(calls) == 1:
+                    shutil.rmtree(paths.previous)
+                    raise patcher.PatchError("deployment failed")
+                return completed(command)
+
+            with self.assertRaisesRegex(
+                patcher.PatchError, re.escape(str(paths.previous.resolve()))
+            ):
+                patcher.deploy_windows_msix(candidate, paths, command_runner=runner)
+
+            self.assertEqual(active_msix.read_bytes(), b"previous")
+
+    def test_failed_first_promotion_removes_registered_custom_full_name_only(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = patcher.windows_patch_paths(root)
+            install = root / "installed-custom"
+            (install / "resources").mkdir(parents=True)
+            (install / "resources" / "app.asar").write_bytes(patcher.PATCH_MARKER)
+            candidate = root / "candidate.msix"
+            candidate.write_bytes(b"candidate")
+            payload = json.dumps(
+                {
+                    "Name": "OpenAI.ChatGPT.CodexPatch",
+                    "PackageFullName": "OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__local",
+                    "PackageFamilyName": "OpenAI.ChatGPT.CodexPatch_local",
+                    "Version": "1.2.3.4",
+                    "InstallLocation": str(install),
+                }
+            )
+            calls = []
+
+            def runner(command):
+                calls.append(command)
+                if "ConvertTo-Json" in command[-1]:
+                    return completed(command, payload)
+                return completed(command)
+
+            with mock.patch.object(
+                patcher,
+                "promote_windows_active",
+                side_effect=patcher.PatchError("promotion failed"),
+            ):
+                with self.assertRaisesRegex(patcher.PatchError, "promotion failed"):
+                    patcher.deploy_windows_msix(
+                        candidate, paths, command_runner=runner
+                    )
+
+            remove_script = next(
+                command[-1]
+                for command in calls
+                if "Remove-AppxPackage" in command[-1]
+            )
+            self.assertIn("PackageFullName -eq", remove_script)
+            self.assertNotIn("Get-AppxPackage -Package", remove_script)
+            self.assertFalse(paths.active.exists())
+
+    def test_snapshot_and_promotion_preserve_identity_and_digest_metadata(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = patcher.windows_patch_paths(root)
+            paths.original.mkdir(parents=True)
+            (paths.original / "package.json").write_text(
+                json.dumps(
+                    {
+                        "name": "OpenAI.ChatGPT",
+                        "store_package_full_name": "store-full-name",
+                        "source_version": "1.2.3.4",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            paths.active.mkdir()
+            old_msix = paths.active / "old.msix"
+            old_msix.write_bytes(b"old")
+
+            self.assertEqual(patcher.snapshot_windows_active(paths), paths.previous)
+            self.assertEqual((paths.previous / old_msix.name).read_bytes(), b"old")
+
+            candidate = root / "candidate.msix"
+            candidate.write_bytes(b"candidate")
+            patcher.promote_windows_active(
+                candidate,
+                paths,
+                metadata={"custom_package_full_name": "custom-full-name"},
+            )
+
+            metadata = json.loads((paths.active / "package.json").read_text())
+            self.assertEqual(metadata["custom_package_full_name"], "custom-full-name")
+            self.assertEqual(metadata["store_package_full_name"], "store-full-name")
+            self.assertEqual(metadata["source_version"], "1.2.3.4")
+            self.assertEqual(
+                metadata["candidate_sha256"],
+                hashlib.sha256(b"candidate").hexdigest(),
+            )
+
+    def test_verified_recovery_restores_active_then_removes_previous(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = patcher.windows_patch_paths(root)
+            paths.active.mkdir(parents=True)
+            (paths.active / "previous.msix").write_bytes(b"previous")
+            candidate = root / "candidate.msix"
+            candidate.write_bytes(b"candidate")
+            installed = root / "installed-custom"
+            (installed / "resources").mkdir(parents=True)
+            (installed / "resources" / "app.asar").write_bytes(
+                patcher.PATCH_MARKER
+            )
+            payload = json.dumps(
+                {
+                    "Name": "OpenAI.ChatGPT.CodexPatch",
+                    "PackageFullName": "custom-full-name",
+                    "PackageFamilyName": "custom-family",
+                    "Version": "1.2.3.4",
+                    "InstallLocation": str(installed),
+                }
+            )
+            calls = []
+
+            def runner(command):
+                calls.append(command)
+                if "Add-AppxPackage" in command[-1] and len(calls) == 1:
+                    raise patcher.PatchError("deployment failed")
+                if "ConvertTo-Json" in command[-1]:
+                    return completed(command, payload)
+                return completed(command)
+
+            with self.assertRaisesRegex(patcher.PatchError, "deployment failed"):
+                patcher.deploy_windows_msix(
+                    candidate, paths, command_runner=runner
+                )
+
+            self.assertEqual(
+                (paths.active / "previous.msix").read_bytes(), b"previous"
+            )
+            self.assertFalse(paths.previous.exists())
+
+    def test_recovery_verifies_against_previous_not_new_store_version(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = patcher.windows_patch_paths(root)
+            paths.original.mkdir(parents=True)
+            (paths.original / "package.json").write_text(
+                json.dumps(
+                    {
+                        "name": "OpenAI.ChatGPT",
+                        "source_version": "2.0.0.0",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            paths.active.mkdir()
+            (paths.active / "previous.msix").write_bytes(b"previous")
+            (paths.active / "package.json").write_text(
+                json.dumps(
+                    {
+                        "custom_package_name": "OpenAI.ChatGPT.CodexPatch",
+                        "custom_package_full_name": "previous-full-name",
+                        "source_version": "1.0.0.0",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            candidate = root / "candidate.msix"
+            candidate.write_bytes(b"candidate")
+            payload = self._installed_payload(root, version="1.0.0.0")
+            calls = []
+
+            def runner(command):
+                calls.append(command)
+                if "Add-AppxPackage" in command[-1] and len(calls) == 1:
+                    raise patcher.PatchError("deployment failed")
+                if "ConvertTo-Json" in command[-1]:
+                    return completed(command, payload)
+                return completed(command)
+
+            with self.assertRaisesRegex(patcher.PatchError, "^deployment failed$"):
+                patcher.deploy_windows_msix(
+                    candidate, paths, command_runner=runner
+                )
+
+            self.assertFalse(paths.previous.exists())
+            self.assertEqual(
+                (paths.active / "previous.msix").read_bytes(), b"previous"
+            )
+
+    def test_original_validation_uses_default_injected_command_adapter(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = self._store_package(root)
+            paths = patcher.windows_patch_paths(root)
+
+            def runner(command):
+                extracted = Path(command[-1])
+                assets = extracted / "webview" / "assets"
+                assets.mkdir(parents=True)
+                (assets / "app-initial-supported.js").write_text(
+                    "\n".join(patcher.BUILD_5828_BUNDLE_MARKERS),
+                    encoding="utf-8",
+                )
+                return completed(command)
+
+            with mock.patch.object(
+                patcher, "run_windows_command", side_effect=runner
+            ) as default_runner:
+                patcher.ensure_windows_original(package, paths)
+
+            default_runner.assert_called_once()
+
+    def test_failed_promotion_preserves_displaced_active_if_restore_fails(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = patcher.windows_patch_paths(root)
+            paths.active.mkdir(parents=True)
+            (paths.active / "old.msix").write_bytes(b"old")
+            candidate = root / "candidate.msix"
+            candidate.write_bytes(b"candidate")
+            real_replace = patcher.os.replace
+            replace_calls = 0
+
+            def replace(source, target):
+                nonlocal replace_calls
+                if not Path(source).is_dir():
+                    return real_replace(source, target)
+                replace_calls += 1
+                if replace_calls == 1:
+                    return real_replace(source, target)
+                raise OSError("simulated replace failure")
+
+            with mock.patch.object(patcher.os, "replace", side_effect=replace):
+                with self.assertRaisesRegex(patcher.PatchError, "displaced-active"):
+                    patcher.promote_windows_active(candidate, paths)
+
+            displaced = list(paths.root.glob(".active-*/displaced-active"))
+            self.assertEqual(len(displaced), 1)
+            self.assertEqual((displaced[0] / "old.msix").read_bytes(), b"old")
+
+    def test_windows_adapter_writes_config_only_after_verified_deploy(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = root / "desktop-model-providers.json"
+            package = self._store_package(root)
+            tools = patcher.WindowsToolPaths(
+                root / "MakeAppx.exe", root / "SignTool.exe"
+            )
+            certificate = patcher.WindowsSigningCertificate("CN=Patch", "ABC")
+            events = []
+
+            def build(_package, _original, work, _tools, _certificate, _runner):
+                candidate = work / "candidate.msix"
+                candidate.write_bytes(b"candidate")
+                events.append("build")
+                return candidate
+
+            with (
+                mock.patch.object(
+                    patcher,
+                    "discover_windows_store_package",
+                    return_value=package,
+                ),
+                mock.patch.object(
+                    patcher, "find_windows_sdk_tools", return_value=tools
+                ),
+                mock.patch.object(
+                    patcher,
+                    "windows_signing_certificate",
+                    return_value=certificate,
+                ),
+                mock.patch.object(patcher, "ensure_windows_original"),
+                mock.patch.object(
+                    patcher, "build_windows_patched_msix", side_effect=build
+                ),
+                mock.patch.object(
+                    patcher,
+                    "deploy_windows_msix",
+                    side_effect=lambda *args, **kwargs: events.append("deploy"),
+                ),
+                mock.patch.object(
+                    patcher,
+                    "ensure_provider_config",
+                    side_effect=lambda *args: events.append("config"),
+                ),
+            ):
+                patcher.patch_windows_store_app(
+                    config,
+                    False,
+                    False,
+                    root,
+                    command_runner=lambda command: completed(command),
+                )
+
+            self.assertEqual(events, ["build", "deploy", "config"])
+
+    def test_default_windows_runner_captures_text_output(self):
+        command = ["powershell.exe", "-NoProfile"]
+        with mock.patch.object(
+            patcher.subprocess,
+            "run",
+            return_value=completed(command, "{}"),
+        ) as subprocess_run:
+            result = patcher.run_windows_command(command)
+
+        self.assertEqual(result.stdout, "{}")
+        subprocess_run.assert_called_once_with(
+            command,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )

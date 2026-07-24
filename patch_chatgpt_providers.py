@@ -1231,6 +1231,731 @@ def atomic_write_json(path: Path, data: dict[str, Any]) -> None:
             temporary_path.unlink()
 
 
+def _windows_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as handle:
+            while chunk := handle.read(4 * 1024 * 1024):
+                digest.update(chunk)
+    except OSError as exc:
+        raise PatchError(f"Could not read Windows package artifact: {path}") from exc
+    return digest.hexdigest()
+
+
+def _remove_windows_path(path: Path) -> None:
+    if not path.exists():
+        return
+    try:
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+    except OSError as exc:
+        raise PatchError(f"Could not remove Windows patch artifact: {path}") from exc
+
+
+def _windows_identity_element(manifest_path: Path) -> tuple[ET.Element, ET.Element]:
+    try:
+        root = ET.fromstring(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ET.ParseError) as exc:
+        raise PatchError(f"Windows package manifest is invalid: {manifest_path}") from exc
+    identity = next(
+        (
+            element
+            for element in root.iter()
+            if element.tag.rsplit("}", 1)[-1] == "Identity"
+        ),
+        None,
+    )
+    if identity is None:
+        raise PatchError(f"Windows package manifest has no Identity element: {manifest_path}")
+    return root, identity
+
+
+def _validate_windows_store_layout(
+    layout: Path, package: WindowsStorePackage
+) -> tuple[Path, dict[str, str]]:
+    manifest_path = layout / "AppxManifest.xml"
+    if not layout.is_dir() or not manifest_path.is_file():
+        raise PatchError(f"Windows Store package layout is unreadable: {layout}")
+
+    _root, identity = _windows_identity_element(manifest_path)
+    identity_name = identity.get("Name")
+    identity_version = identity.get("Version")
+    if identity_name != package.name:
+        raise PatchError(
+            "Windows Store package manifest identity does not match the package name"
+        )
+    if identity_version != package.version:
+        raise PatchError(
+            "Windows Store package manifest identity does not match the package version"
+        )
+
+    expected_prefix = f"{package.name}_{package.version}_".lower()
+    full_name = package.package_full_name.strip()
+    if not full_name.lower().startswith(expected_prefix):
+        raise PatchError(
+            "Windows Store package full name does not match its manifest identity"
+        )
+    architecture = package.architecture.strip().lower()
+    full_name_parts = full_name.split("_")
+    if len(full_name_parts) < 4 or architecture not in full_name_parts[2].lower():
+        raise PatchError(
+            "Windows Store package full name does not match its architecture"
+        )
+
+    asar_candidates = tuple(
+        candidate
+        for candidate in (layout / "resources").glob("app.asar")
+        if candidate.is_file()
+    ) if (layout / "resources").is_dir() else ()
+    if len(asar_candidates) != 1:
+        raise PatchError(
+            "Windows Store package must contain exactly one resources/app.asar"
+        )
+    asar_path = asar_candidates[0]
+    try:
+        marked = contains_marker(asar_path)
+    except OSError as exc:
+        raise PatchError(f"Could not inspect Windows ASAR: {asar_path}") from exc
+    if marked:
+        raise PatchError("The clean original Windows payload is already patched")
+
+    # A Store layout keeps the JavaScript bundle inside app.asar.  When a
+    # fixture or future package exposes the extracted assets, validate its
+    # exact build markers now; otherwise build_windows_patched_msix performs
+    # the same validation immediately before mutation.
+    assets = layout / "webview" / "assets"
+    if assets.is_dir():
+        try:
+            current_patch_bundle(assets)
+        except PatchError:
+            raise
+        except Exception as exc:
+            raise PatchError("Windows Store source bundle markers are unsupported") from exc
+
+    return asar_path, {
+        "name": package.name,
+        "package_full_name": full_name,
+        "package_family_name": package.package_family_name,
+        "version": package.version,
+        "architecture": package.architecture,
+        "manifest_name": identity_name or "",
+        "manifest_version": identity_version or "",
+    }
+
+
+def ensure_windows_original(
+    package: WindowsStorePackage,
+    paths: WindowsPatchPaths,
+    *,
+    command_runner: Any | None = None,
+) -> Path:
+    """Create a verified clean copy without touching active deployment state."""
+
+    paths.root.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=".original-", dir=paths.root))
+    candidate = staging / paths.original.name
+    displaced = staging / "displaced-original"
+    preserve_staging = False
+    try:
+        try:
+            shutil.copytree(package.install_location, candidate)
+        except OSError as exc:
+            raise PatchError(
+                f"Could not copy the Windows Store payload into staging: "
+                f"{package.install_location}"
+            ) from exc
+
+        asar_path, metadata = _validate_windows_store_layout(candidate, package)
+        if command_runner is None:
+            command_runner = run_windows_command
+        extracted = staging / "source-validation"
+        _run_windows_package_command(
+            command_runner,
+            [
+                "npx",
+                "--yes",
+                ASAR_PACKAGE,
+                "extract",
+                str(asar_path),
+                str(extracted),
+            ],
+        )
+        current_patch_bundle(extracted / "webview" / "assets")
+        metadata.update(
+            {
+                "kind": "windows-store-original",
+                "source_version": package.version,
+                "store_package_full_name": package.package_full_name,
+            }
+        )
+        # Identity metadata is written only after the staged payload has
+        # passed every clean-source check.
+        atomic_write_json(candidate / "package.json", metadata)
+
+        if paths.original.exists():
+            os.replace(paths.original, displaced)
+        try:
+            os.replace(candidate, paths.original)
+        except Exception as promotion_exc:
+            if displaced.exists() and not paths.original.exists():
+                try:
+                    os.replace(displaced, paths.original)
+                except Exception as restore_exc:
+                    preserve_staging = True
+                    raise PatchError(
+                        "Could not restore the displaced Windows original; "
+                        f"recovery data remains at: {displaced.resolve()}"
+                    ) from restore_exc
+            raise promotion_exc
+        if displaced.exists():
+            _remove_windows_path(displaced)
+        return paths.original
+    finally:
+        if not preserve_staging:
+            shutil.rmtree(staging, ignore_errors=True)
+
+
+def _windows_metadata(path: Path) -> dict[str, Any]:
+    metadata_path = path / "package.json"
+    if not metadata_path.is_file():
+        return {}
+    try:
+        value = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise PatchError(f"Windows patch metadata is invalid: {metadata_path}") from exc
+    if not isinstance(value, dict):
+        raise PatchError(f"Windows patch metadata must be a JSON object: {metadata_path}")
+    return value
+
+
+def _windows_active_msix(path: Path) -> Path:
+    if not path.is_dir():
+        raise PatchError(f"Windows active artifact is not a directory: {path}")
+    candidates = tuple(
+        candidate for candidate in path.glob("*.msix") if candidate.is_file()
+    )
+    if len(candidates) != 1:
+        raise PatchError(
+            "Windows active artifact must contain exactly one signed .msix package"
+        )
+    return candidates[0]
+
+
+def snapshot_windows_active(paths: WindowsPatchPaths) -> Path | None:
+    """Atomically preserve the current active package for a replacement."""
+
+    paths.root.mkdir(parents=True, exist_ok=True)
+    if paths.previous.exists():
+        raise PatchError(
+            f"A previous Windows package snapshot already exists; recover or "
+            f"remove it first: {paths.previous}"
+        )
+    if not paths.active.exists():
+        return None
+
+    source_msix = _windows_active_msix(paths.active)
+    staging = Path(tempfile.mkdtemp(prefix=".previous-", dir=paths.root))
+    candidate = staging / paths.previous.name
+    try:
+        try:
+            shutil.copytree(paths.active, candidate)
+        except OSError as exc:
+            raise PatchError("Could not stage the active Windows package snapshot") from exc
+        copied_msix = candidate / source_msix.name
+        if _windows_sha256(source_msix) != _windows_sha256(copied_msix):
+            raise PatchError("Windows active package snapshot digest verification failed")
+        os.replace(candidate, paths.previous)
+        return paths.previous
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
+def _windows_default_metadata(paths: WindowsPatchPaths) -> dict[str, Any]:
+    original = _windows_metadata(paths.original) if paths.original.exists() else {}
+    store_name = str(
+        original.get("name") or original.get("store_package_name") or WINDOWS_STORE_PACKAGE_NAME
+    )
+    store_full_name = str(
+        original.get("store_package_full_name")
+        or original.get("package_full_name")
+        or ""
+    )
+    source_version = str(
+        original.get("source_version") or original.get("version") or ""
+    )
+    custom_name = str(original.get("custom_package_name") or f"{store_name}.CodexPatch")
+    return {
+        "kind": "windows-store-active",
+        "custom_package_name": custom_name,
+        "custom_package_full_name": custom_name,
+        "store_package_full_name": store_full_name,
+        "source_version": source_version,
+    }
+
+
+def promote_windows_active(
+    candidate_msix: Path,
+    paths: WindowsPatchPaths,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> Path:
+    """Promote a verified MSIX by swapping staged directories atomically."""
+
+    candidate_msix = Path(candidate_msix)
+    if not candidate_msix.is_file():
+        raise PatchError(f"Windows candidate MSIX is missing: {candidate_msix}")
+    paths.root.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=".active-", dir=paths.root))
+    candidate_dir = staging / paths.active.name
+    displaced = staging / "displaced-active"
+    preserve_staging = False
+    try:
+        candidate_dir.mkdir()
+        staged_msix = candidate_dir / candidate_msix.name
+        shutil.copyfile(candidate_msix, staged_msix)
+        candidate_hash = _windows_sha256(candidate_msix)
+        if _windows_sha256(staged_msix) != candidate_hash:
+            raise PatchError("Windows candidate package digest verification failed")
+        active_metadata = _windows_default_metadata(paths)
+        if metadata:
+            active_metadata.update(metadata)
+        active_metadata["candidate_sha256"] = candidate_hash
+        active_metadata["sha256"] = candidate_hash
+        active_metadata["candidate_name"] = candidate_msix.name
+        atomic_write_json(candidate_dir / "package.json", active_metadata)
+
+        if paths.active.exists():
+            os.replace(paths.active, displaced)
+        try:
+            os.replace(candidate_dir, paths.active)
+        except Exception as promotion_exc:
+            if displaced.exists() and not paths.active.exists():
+                try:
+                    os.replace(displaced, paths.active)
+                except Exception as restore_exc:
+                    preserve_staging = True
+                    raise PatchError(
+                        "Could not restore the displaced Windows active artifact; "
+                        f"recovery data remains at: {displaced.resolve()}"
+                    ) from restore_exc
+            raise promotion_exc
+        if displaced.exists():
+            _remove_windows_path(displaced)
+        return paths.active
+    finally:
+        if not preserve_staging:
+            shutil.rmtree(staging, ignore_errors=True)
+
+
+def restore_windows_previous(paths: WindowsPatchPaths) -> Path:
+    """Restore the on-disk active artifact while retaining previous evidence."""
+
+    if not paths.previous.exists():
+        raise PatchError(f"Windows previous snapshot is missing: {paths.previous}")
+    source_msix = _windows_active_msix(paths.previous)
+    staging = Path(tempfile.mkdtemp(prefix=".active-rollback-", dir=paths.root))
+    candidate = staging / paths.active.name
+    displaced = staging / "displaced-active"
+    preserve_staging = False
+    try:
+        shutil.copytree(paths.previous, candidate)
+        copied_msix = candidate / source_msix.name
+        if _windows_sha256(source_msix) != _windows_sha256(copied_msix):
+            raise PatchError("Windows rollback package digest verification failed")
+        if paths.active.exists():
+            os.replace(paths.active, displaced)
+        try:
+            os.replace(candidate, paths.active)
+        except Exception as promotion_exc:
+            if displaced.exists() and not paths.active.exists():
+                try:
+                    os.replace(displaced, paths.active)
+                except Exception as restore_exc:
+                    preserve_staging = True
+                    raise PatchError(
+                        "Could not restore the displaced Windows active artifact; "
+                        f"recovery data remains at: {displaced.resolve()}"
+                    ) from restore_exc
+            raise promotion_exc
+        if displaced.exists():
+            _remove_windows_path(displaced)
+        return paths.active
+    finally:
+        if not preserve_staging:
+            shutil.rmtree(staging, ignore_errors=True)
+
+
+def _windows_powershell_command(script: str) -> list[str]:
+    return [
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        script,
+    ]
+
+
+def run_windows_command(command: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        command,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+
+def _windows_custom_name(paths: WindowsPatchPaths) -> str:
+    return str(_windows_default_metadata(paths)["custom_package_name"])
+
+
+def _windows_store_full_name(paths: WindowsPatchPaths) -> str:
+    return str(_windows_default_metadata(paths)["store_package_full_name"])
+
+
+def _windows_add_script(
+    candidate_msix: Path,
+    custom_name: str,
+    *,
+    allow_running: bool,
+    allow_existing: bool,
+) -> str:
+    escaped_path = str(candidate_msix).replace("'", "''")
+    escaped_name = custom_name.replace("'", "''")
+    lines = ["$ErrorActionPreference = 'Stop'"]
+    lines.extend(
+        [
+            f"$custom = Get-AppxPackage -Name '{escaped_name}' | "
+            "Select-Object -First 1",
+        ]
+    )
+    if not allow_existing:
+        lines.append(
+            "if ($null -ne $custom) { "
+            "throw 'An unmanaged custom package is already registered' }"
+        )
+    if not allow_running:
+        lines.extend(
+            [
+                "if ($null -ne $custom) {",
+                "  $prefix = [System.IO.Path]::GetFullPath($custom.InstallLocation).TrimEnd('\\') + '\\'",
+                "  Get-CimInstance Win32_Process | ForEach-Object {",
+                "    if ($_.ExecutablePath -and $_.ExecutablePath.StartsWith("
+                "$prefix, [System.StringComparison]::OrdinalIgnoreCase)) {",
+                "      Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop",
+                "    }",
+                "  }",
+                "}",
+            ]
+        )
+    lines.append(
+        f"Add-AppxPackage -Path '{escaped_path}' -ForceApplicationShutdown"
+    )
+    return "\n".join(lines)
+
+
+def _windows_query_script(custom_name: str) -> str:
+    escaped_name = custom_name.replace("'", "''")
+    marker = PATCH_MARKER.decode().replace("'", "''")
+    return "\n".join(
+        [
+            "$ErrorActionPreference = 'Stop'",
+            f"$custom = Get-AppxPackage -Name '{escaped_name}' | "
+            "Select-Object -First 1",
+            "if ($null -eq $custom) { throw 'Custom package is not registered' }",
+            "$asar = Join-Path $custom.InstallLocation 'resources\\app.asar'",
+            "if (-not (Test-Path -LiteralPath $asar -PathType Leaf)) { "
+            "throw 'Custom package ASAR is missing' }",
+            f"$marker = '{marker}'",
+            "$bytes = [System.IO.File]::ReadAllBytes($asar)",
+            "$text = [System.Text.Encoding]::GetEncoding(28591).GetString($bytes)",
+            "if (-not $text.Contains($marker)) { "
+            "throw 'Custom package ASAR marker is missing' }",
+            "$custom | Select-Object Name, PackageFullName, PackageFamilyName, "
+            "Version, InstallLocation | ConvertTo-Json -Compress",
+        ]
+    )
+
+
+def _windows_remove_script(custom_name: str, package_full_name: str) -> str:
+    escaped_name = custom_name.replace("'", "''")
+    escaped_full_name = package_full_name.replace("'", "''")
+    package_expression = (
+        f"Get-AppxPackage -Name '{escaped_name}' | "
+        f"Where-Object {{ $_.PackageFullName -eq '{escaped_full_name}' }}"
+    )
+    return (
+        "$ErrorActionPreference = 'Stop'; "
+        f"$custom = {package_expression} | Select-Object -First 1; "
+        "if ($null -ne $custom) { Remove-AppxPackage -Package "
+        "$custom.PackageFullName }"
+    )
+
+
+def _query_windows_custom_package(
+    command_runner: Any, custom_name: str
+) -> dict[str, Any]:
+    command = _windows_powershell_command(_windows_query_script(custom_name))
+    try:
+        result = command_runner(command)
+    except PatchError:
+        raise
+    except Exception as exc:
+        raise PatchError("Could not query the custom Windows package") from exc
+    if getattr(result, "returncode", 0) != 0:
+        raise PatchError("Could not query the custom Windows package")
+    output = getattr(result, "stdout", "") or ""
+    if not output.strip():
+        raise PatchError("The custom Windows package is not registered")
+    try:
+        payload = json.loads(output.strip())
+    except json.JSONDecodeError as exc:
+        raise PatchError("Custom Windows package query returned invalid JSON") from exc
+    if not isinstance(payload, dict):
+        raise PatchError("Custom Windows package query returned invalid JSON")
+    return payload
+
+
+def _verify_windows_custom_package(
+    payload: dict[str, Any],
+    paths: WindowsPatchPaths,
+    *,
+    expected_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if not payload:
+        raise PatchError("The custom Windows package is not registered")
+    expected = expected_metadata or _windows_default_metadata(paths)
+    custom_name = str(expected.get("custom_package_name") or _windows_custom_name(paths))
+    if payload.get("Name") != custom_name:
+        raise PatchError("The custom Windows package registration has the wrong identity")
+    expected_version = expected.get("source_version")
+    if expected_version and str(payload.get("Version", "")) != str(expected_version):
+        raise PatchError("The custom Windows package registration has the wrong version")
+    install_location = payload.get("InstallLocation")
+    if not isinstance(install_location, str) or not install_location.strip():
+        raise PatchError("The custom Windows package registration omitted InstallLocation")
+    install = Path(install_location)
+    asar_candidates = tuple(
+        candidate
+        for candidate in (install / "resources").glob("app.asar")
+        if candidate.is_file()
+    ) if (install / "resources").is_dir() else ()
+    if len(asar_candidates) != 1:
+        raise PatchError("The installed custom Windows package has no unique ASAR")
+    try:
+        if not contains_marker(asar_candidates[0]):
+            raise PatchError("The installed custom Windows ASAR is missing the patch marker")
+    except OSError as exc:
+        raise PatchError("Could not inspect the installed custom Windows ASAR") from exc
+    return payload
+
+
+def _recover_windows_deployment(
+    paths: WindowsPatchPaths,
+    command_runner: Any,
+    *,
+    custom_name: str,
+    custom_full_name: str,
+    had_previous: bool,
+) -> list[str]:
+    failures: list[str] = []
+    previous_metadata: dict[str, Any] = {}
+    if had_previous and paths.previous.exists():
+        try:
+            previous_metadata = _windows_metadata(paths.previous)
+        except Exception as exc:
+            failures.append(f"read previous metadata: {exc}")
+    if not custom_full_name:
+        custom_full_name = str(
+            previous_metadata.get("custom_package_full_name") or ""
+        )
+    if not custom_full_name:
+        try:
+            registered = _query_windows_custom_package(command_runner, custom_name)
+            if registered.get("Name") == custom_name:
+                custom_full_name = str(registered.get("PackageFullName") or "")
+        except Exception:
+            pass
+    if custom_full_name:
+        try:
+            _run_windows_package_command(
+                command_runner,
+                _windows_powershell_command(
+                    _windows_remove_script(custom_name, custom_full_name)
+                ),
+            )
+        except Exception as exc:
+            failures.append(f"remove custom package: {exc}")
+
+    if had_previous:
+        previous_msix: Path | None = None
+        try:
+            previous_msix = _windows_active_msix(paths.previous)
+        except Exception as exc:
+            failures.append(f"inspect previous package: {exc}")
+        if previous_msix is not None:
+            try:
+                _run_windows_package_command(
+                    command_runner,
+                    _windows_powershell_command(
+                        _windows_add_script(
+                            previous_msix,
+                            custom_name,
+                            allow_running=True,
+                            allow_existing=True,
+                        )
+                    ),
+                )
+            except Exception as exc:
+                failures.append(f"reinstall previous package: {exc}")
+            try:
+                payload = _query_windows_custom_package(command_runner, custom_name)
+                _verify_windows_custom_package(
+                    payload,
+                    paths,
+                    expected_metadata=previous_metadata,
+                )
+            except Exception as exc:
+                failures.append(f"verify previous package: {exc}")
+        try:
+            restore_windows_previous(paths)
+        except Exception as exc:
+            failures.append(f"restore active artifact: {exc}")
+        if not failures:
+            try:
+                _remove_windows_path(paths.previous)
+            except Exception as exc:
+                failures.append(f"remove previous snapshot: {exc}")
+    else:
+        # A first install must not leave a failed candidate as an active
+        # artifact.  The official Store app is never touched here.
+        try:
+            _remove_windows_path(paths.active)
+        except Exception as exc:
+            failures.append(f"remove failed active artifact: {exc}")
+    return failures
+
+
+def deploy_windows_msix(
+    candidate_msix: Path,
+    paths: WindowsPatchPaths,
+    command_runner: Any,
+    *,
+    allow_running: bool = False,
+) -> Path:
+    """Install a signed custom package and transactionally promote its artifact."""
+
+    candidate_msix = Path(candidate_msix)
+    if not candidate_msix.is_file():
+        raise PatchError(f"Windows candidate MSIX is missing: {candidate_msix}")
+    had_previous = paths.active.exists()
+    snapshot_created = False
+    registration_attempted = False
+    custom_name = _windows_custom_name(paths)
+    custom_full_name = ""
+    try:
+        if had_previous:
+            snapshot_windows_active(paths)
+            snapshot_created = True
+
+        add_command = _windows_powershell_command(
+            _windows_add_script(
+                candidate_msix,
+                custom_name,
+                allow_running=allow_running,
+                allow_existing=had_previous,
+            )
+        )
+        registration_attempted = True
+        _run_windows_package_command(command_runner, add_command)
+
+        installed = _query_windows_custom_package(command_runner, custom_name)
+        _verify_windows_custom_package(installed, paths)
+        custom_full_name = str(installed.get("PackageFullName") or "")
+        active_metadata = {
+            "custom_package_name": custom_name,
+            "custom_package_full_name": custom_full_name or custom_name,
+            "store_package_full_name": _windows_store_full_name(paths),
+            "source_version": _windows_default_metadata(paths).get("source_version", ""),
+        }
+        promote_windows_active(candidate_msix, paths, metadata=active_metadata)
+        if paths.previous.exists():
+            _remove_windows_path(paths.previous)
+        return paths.active
+    except Exception as exc:
+        if not registration_attempted and not snapshot_created:
+            raise
+        recovery_failures = _recover_windows_deployment(
+            paths,
+            command_runner,
+            custom_name=custom_name,
+            custom_full_name=custom_full_name,
+            had_previous=snapshot_created,
+        )
+        if recovery_failures:
+            previous_location = paths.previous.resolve()
+            raise PatchError(
+                f"{exc}\nWindows deployment recovery failed: "
+                f"{'; '.join(recovery_failures)}\n"
+                f"The previous Windows package snapshot remains at: "
+                f"{previous_location}"
+            ) from exc
+        raise
+
+
+def _windows_sdk_search_roots() -> tuple[Path, ...]:
+    roots: list[Path] = []
+    for variable in ("PROGRAMFILES(X86)", "PROGRAMFILES", "ProgramFiles(x86)", "ProgramFiles"):
+        value = os.environ.get(variable)
+        if value:
+            roots.append(Path(value) / "Windows Kits" / "10" / "bin")
+    return tuple(dict.fromkeys(roots))
+
+
+def patch_windows_store_app(
+    config: Path,
+    overwrite_config: bool,
+    allow_running: bool,
+    local_app_data: Path,
+    command_runner: Any | None = None,
+) -> None:
+    """Run all Windows preflight/build work before transactional deployment."""
+
+    if command_runner is None:
+        command_runner = run_windows_command
+    package = discover_windows_store_package(command_runner)
+    paths = windows_patch_paths(Path(local_app_data))
+    if paths.previous.exists():
+        raise PatchError(
+            f"A previous Windows package snapshot requires recovery or removal: "
+            f"{paths.previous}"
+        )
+    tools = find_windows_sdk_tools(_windows_sdk_search_roots())
+    certificate = windows_signing_certificate(command_runner)
+    ensure_windows_original(package, paths, command_runner=command_runner)
+    paths.root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="windows-package-", dir=paths.root) as temporary:
+        candidate = build_windows_patched_msix(
+            package,
+            paths.original,
+            Path(temporary),
+            tools,
+            certificate,
+            command_runner,
+        )
+        deploy_windows_msix(
+            candidate,
+            paths,
+            command_runner,
+            allow_running=allow_running,
+        )
+    # Config is deliberately the final operation: a failed Windows preflight
+    # or deployment never creates a new JSON file.
+    ensure_provider_config(Path(config), overwrite_config)
+
+
 def ensure_provider_config(path: Path, overwrite: bool) -> str:
     if overwrite or not path.exists() or path.stat().st_size == 0:
         validate_provider_config(DEFAULT_PROVIDER_CONFIG)
