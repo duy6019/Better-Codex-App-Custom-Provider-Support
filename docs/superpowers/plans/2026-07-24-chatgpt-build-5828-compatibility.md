@@ -442,7 +442,8 @@ print(json.dumps({"protected_hashes": after, "status": "ok"}, indent=2))
 PY
 ```
 
-Expected: both Prettier passes, all six hunks, `node --check`, ASAR packing,
+Expected: both Prettier passes, all embedded hunks (four total: two
+`CENTRAL_DIFF` and two `PICKER_DIFF`), `node --check`, ASAR packing,
 marker checks, and integrity verification succeed. JSON ends with
 `"status": "ok"`, and all protected hashes remain stable.
 
