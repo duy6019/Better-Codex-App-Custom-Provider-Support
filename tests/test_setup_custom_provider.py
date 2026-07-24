@@ -267,6 +267,13 @@ class InteractiveSetupTests(unittest.TestCase):
 
 
 class DocumentationTests(unittest.TestCase):
+    def test_readme_documents_windows_credential_manager_without_a_literal_key(self):
+        readme = (Path(__file__).parents[1] / "README.md").read_text(encoding="utf-8")
+
+        self.assertIn("Windows Credential Manager", readme)
+        self.assertIn("credential-manager", readme)
+        self.assertNotIn("API_KEY_CUA_BAN", readme)
+
     def test_readme_documents_custom_provider_setup_without_a_literal_key(self):
         readme = (Path(__file__).parents[1] / "README.md").read_text(encoding="utf-8")
         normalized_readme = " ".join(readme.split())

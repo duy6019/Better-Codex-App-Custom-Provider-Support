@@ -96,10 +96,15 @@ python3 setup_custom_provider.py
 ```
 
 The wizard asks for the provider ID, display name, base URL, wire API, and
-authentication mode. Choose `keychain` to store the API key in macOS Keychain
-under `codex-<provider-id>`; choose `none` for endpoints that do not require
+authentication mode. Choose the native secure-store option to keep the API key
+out of configuration files: `keychain` on macOS stores it in macOS Keychain,
+while `credential-manager` on Windows stores it as a Generic Credential in
+Windows Credential Manager. Choose `none` for endpoints that do not require
 authentication. The key is not written to `config.toml` or the provider-routing
-JSON file.
+JSON file. The stored credential is named `codex-<provider-id>`.
+
+The wizard supports macOS and Windows. The application patch remains
+macOS-specific.
 
 The provider is added to the desktop provider menu. This wizard does not create
 model catalog entries or model routing; choose a model supported by the endpoint,
