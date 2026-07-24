@@ -1076,14 +1076,14 @@ def stop_target_app_processes(app: Path, allow_running: bool) -> None:
 
 def unique_candidate(
     assets: Path,
-    filename_fragment: str,
+    filename_glob: str,
     content_needles: tuple[str, ...],
     role: str,
 ) -> Path:
     filename_matches = sorted(
         path
-        for path in assets.glob("*.js")
-        if filename_fragment in path.name and not path.name.endswith(".map.js")
+        for path in assets.glob(filename_glob)
+        if not path.name.endswith(".map.js")
     )
     matches = []
     for path in filename_matches:
@@ -1093,7 +1093,7 @@ def unique_candidate(
     if len(matches) != 1:
         raise PatchError(
             f"Expected exactly one {role} JavaScript bundle containing "
-            f"'{filename_fragment}' and its source markers, found {len(matches)} "
+            f"'{filename_glob}' and its source markers, found {len(matches)} "
             f"out of {len(filename_matches)} filename matches"
         )
     return matches[0]
@@ -1102,7 +1102,7 @@ def unique_candidate(
 def current_patch_bundle(assets: Path) -> Path:
     return unique_candidate(
         assets,
-        "app-initial-",
+        "app-initial-*.js",
         BUILD_5813_BUNDLE_MARKERS,
         "ChatGPT 26.721.30844 build 5813 application",
     )

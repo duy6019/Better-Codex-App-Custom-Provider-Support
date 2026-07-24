@@ -372,6 +372,21 @@ class CurrentBundleTests(unittest.TestCase):
             ):
                 patcher.current_patch_bundle(assets)
 
+    def test_current_patch_bundle_rejects_prefixed_impostor(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            assets = Path(temporary)
+            self.write_bundle(
+                assets,
+                "legacy-app-initial-unexpected.js",
+                patcher.BUILD_5813_BUNDLE_MARKERS,
+            )
+
+            with self.assertRaisesRegex(
+                patcher.PatchError,
+                "found 0 out of 0 filename matches",
+            ):
+                patcher.current_patch_bundle(assets)
+
     def test_patch_current_bundle_applies_both_diffs_to_one_file(self):
         with tempfile.TemporaryDirectory() as temporary:
             bundle = Path(temporary) / "app-initial-current.js"
