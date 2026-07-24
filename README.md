@@ -105,9 +105,9 @@ py setup_custom_provider.py
 ```
 
 The official Store app is not modified. The patcher copies and validates its
-payload, builds and signs a separate custom package, then launches that patched
-package. It stores the clean source, active package, and any recovery snapshot
-under `%LOCALAPPDATA%\Codex\ChatGPTProviderPatch`.
+payload, builds and signs a separate custom package, then leaves that patched
+package available to launch. It stores the clean source, active package, and
+any recovery snapshot under `%LOCALAPPDATA%\Codex\ChatGPTProviderPatch`.
 
 Do not pass `--app` or `--reapply-from` on Windows: those options are for the
 macOS app-bundle flow.
