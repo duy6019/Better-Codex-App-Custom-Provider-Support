@@ -59,9 +59,11 @@ def test_picker_filters_raw_models_before_composer_derivations(self):
         "x = codexUseProviderFilteredModels(y?.models)",
         patcher.PICKER_DIFF,
     )
-    self.assertIn("B = wAs(x, S)", patcher.PICKER_DIFF)
-    self.assertIn("V = qos(x)", patcher.PICKER_DIFF)
-    self.assertIn("K = Wos(x, { includeUltraInSlider: s })", patcher.PICKER_DIFF)
+    self.assertIn("S = g.model;", patcher.PICKER_DIFF)
+    self.assertLess(
+        patcher.PICKER_DIFF.index("x = codexUseProviderFilteredModels(y?.models)"),
+        patcher.PICKER_DIFF.index("S = g.model;"),
+    )
 
 def test_picker_provider_state_notifies_model_filter_subscribers(self):
     self.assertIn("e.listeners ??= new Set()", patcher.PICKER_DIFF)

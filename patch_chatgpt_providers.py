@@ -542,6 +542,24 @@ PICKER_DIFF = r"""@@ -548655,6 +548655,204 @@
      ((eMs = c()),
 +      (CodexProviderPatchReact = r(o(), 1)),
        fd(),
+@@ -550030,7 +550030,7 @@
+     { data: y, status: b } = UM({
+       additionalAvailableModels: void 0,
+       hostId: d.hostId,
+     }),
+-    x = y?.models,
++    x = codexUseProviderFilteredModels(y?.models),
+     S = g.model;
+@@ -550170,6 +550170,6 @@
+-  function Se(e, t) {
++  CodexProviderPatchReact.useEffect(() => {
++    let e = codexFindProviderModelReplacement(x, S);
++    if (e == null) return;
++    xe(e.model, codexReplacementReasoningEffort(e, g.reasoningEffort));
++  }, [x, S, g.reasoningEffort]);
++  function Se(e, t) {
+     return v(e, t);
+   }
 """
 
 
