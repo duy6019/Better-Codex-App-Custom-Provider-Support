@@ -83,7 +83,7 @@
 
 - [ ] **Step 2: Run the tests and verify RED.** Run `python -m unittest tests.test_windows_store_patch.WindowsStoreDiscoveryTests -v`. Expected: failures name all three missing interfaces and no test skips on a non-Windows host.
 
-- [ ] **Step 3: Add the smallest discovery/preflight implementation.** Import `dataclasses`, add `WINDOWS_STORE_PACKAGE_NAME = "OpenAI.ChatGPT"`, and add these data types:
+- [ ] **Step 3: Add the smallest discovery/preflight implementation.** Import `dataclasses` and `Sequence` from `typing`, add `WINDOWS_STORE_PACKAGE_NAME = "OpenAI.ChatGPT"`, and add these data types:
 
     @dataclasses.dataclass(frozen=True)
     class WindowsStorePackage:
@@ -112,7 +112,7 @@
         root = local_app_data / "Codex" / "ChatGPTProviderPatch"
         return WindowsPatchPaths(root, root / "original", root / "active", root / "previous")
 
-`discover_windows_store_package` must invoke `powershell.exe -NoProfile -NonInteractive -Command` with `Get-AppxPackage -Name 'OpenAI.ChatGPT'`, select `Name`, `PackageFullName`, `PackageFamilyName`, `Version`, `Architecture`, and `InstallLocation`, then use `ConvertTo-Json -Compress`. Parse exactly one object. Raise `PatchError` for empty/list output, missing fields, unreadable layout, a missing manifest, or zero/multiple `resources/app.asar` candidates. `find_windows_sdk_tools(search_roots: tuple[Path, ...])` must find `MakeAppx.exe` and `SignTool.exe` in one directory and name the absent tool before any state mutation.
+`discover_windows_store_package` must invoke `powershell.exe -NoProfile -NonInteractive -Command` with `Get-AppxPackage -Name 'OpenAI.ChatGPT'`, select `Name`, `PackageFullName`, `PackageFamilyName`, `Version`, `Architecture`, and `InstallLocation`, then use `ConvertTo-Json -Compress`. Parse exactly one object. Raise `PatchError` for empty/list output, missing fields, unreadable layout, a missing manifest, or zero/multiple `resources/app.asar` candidates. `find_windows_sdk_tools(search_roots: Sequence[Path])` must find `MakeAppx.exe` and `SignTool.exe` in one directory and name the absent tool before any state mutation.
 
 - [ ] **Step 4: Run GREEN and the Windows regressions.** Run `python -m unittest tests.test_windows_store_patch.WindowsStoreDiscoveryTests tests.test_windows_compatibility -v`. Expected: PASS.
 
