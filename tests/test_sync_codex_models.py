@@ -31,52 +31,40 @@ FIXTURE_CATALOG = {
 
 
 class CatalogTests(unittest.TestCase):
-    def test_build_catalog_and_routing_clones_every_bundled_model(self):
-        catalog, routing = sync.build_catalog_and_routing(FIXTURE_CATALOG)
+    def test_build_catalog_keeps_only_bundled_models(self):
+        catalog = sync.build_catalog(FIXTURE_CATALOG)
 
         self.assertEqual(
             [model["slug"] for model in catalog["models"]],
             [
                 "gpt-5.6-sol",
                 "codex-auto-review",
-                "cx/gpt-5.6-sol",
-                "cx/codex-auto-review",
             ],
         )
-        self.assertEqual(catalog["models"][2]["display_name"], "GPT-5.6-Sol (9router)")
-        self.assertEqual(catalog["models"][2]["context_window"], 272000)
+        self.assertEqual(catalog["models"][0]["context_window"], 272000)
         self.assertEqual(FIXTURE_CATALOG["models"][0]["slug"], "gpt-5.6-sol")
-        self.assertEqual(routing["default_provider"], "openai")
-        self.assertEqual(
-            routing["model_providers"],
-            {
-                "cx/gpt-5.6-sol": "9router",
-                "cx/codex-auto-review": "9router",
-            },
-        )
+        self.assertNotIn("cx/gpt-5.6-sol", json.dumps(catalog))
 
     def test_build_catalog_rejects_duplicate_model_slugs(self):
         catalog = {"models": [FIXTURE_CATALOG["models"][0], FIXTURE_CATALOG["models"][0]]}
 
         with self.assertRaisesRegex(sync.SyncError, "duplicate"):
-            sync.build_catalog_and_routing(catalog)
+            sync.build_catalog(catalog)
 
 
 class TomlTests(unittest.TestCase):
     def test_update_codex_toml_serializes_catalog_path_with_forward_slashes(self):
-        updated = sync.update_codex_toml(
-            "", Path("/tmp/custom.json"), "http://127.0.0.1:20128/v1"
-        )
+        updated = sync.update_codex_toml("", Path("/tmp/custom.json"))
 
         self.assertIn('model_catalog_json = "/tmp/custom.json"', updated)
 
-    def test_update_codex_toml_replaces_only_managed_entries(self):
+    def test_update_codex_toml_preserves_every_provider_entry(self):
         existing = """service_tier = \"default\"
 model_catalog_json = \"/old/custom.json\"
 
 [model_providers.9router]
-name = \"Old Router\"
-base_url = \"http://old.example/v1\"
+name = \"Keep Router\"
+base_url = \"https://keep.example/v1\"
 wire_api = \"chat\"
 
 [model_providers.9router.auth]
@@ -89,44 +77,48 @@ name = \"Other\"
 trust_level = \"trusted\"
 """
 
-        updated = sync.update_codex_toml(
-            existing, Path("/tmp/custom.json"), "https://router.example/v1"
-        )
+        updated = sync.update_codex_toml(existing, Path("/tmp/custom.json"))
 
         self.assertIn('model_catalog_json = "/tmp/custom.json"', updated)
-        self.assertIn('[model_providers.9router]\nname = "9Router"', updated)
-        self.assertIn('base_url = "https://router.example/v1"', updated)
-        self.assertIn('wire_api = "responses"', updated)
+        self.assertIn('[model_providers.9router]\nname = "Keep Router"', updated)
+        self.assertIn('base_url = "https://keep.example/v1"', updated)
+        self.assertIn('wire_api = "chat"', updated)
         self.assertIn('[model_providers.9router.auth]\nenv_key = "NINE_ROUTER_API_KEY"', updated)
         self.assertIn('[model_providers.other]\nname = "Other"', updated)
         self.assertIn('[projects."/work"]\ntrust_level = "trusted"', updated)
-        self.assertNotIn('Old Router', updated)
 
-    def test_update_codex_toml_adds_managed_entries_to_empty_file(self):
-        updated = sync.update_codex_toml(
-            "", Path("/tmp/custom.json"), "http://127.0.0.1:20128/v1"
-        )
+    def test_update_codex_toml_adds_only_catalog_entry_to_empty_file(self):
+        updated = sync.update_codex_toml("", Path("/tmp/custom.json"))
 
         self.assertEqual(
             updated,
-            """model_catalog_json = \"/tmp/custom.json\"
-
-[model_providers.9router]
-name = \"9Router\"
-base_url = \"http://127.0.0.1:20128/v1\"
-wire_api = \"responses\"
-""",
+            'model_catalog_json = "/tmp/custom.json"\n',
         )
 
 
 class SynchronizeTests(unittest.TestCase):
-    def test_synchronize_rebuilds_all_generated_files(self):
+    def test_synchronize_rebuilds_catalog_without_changing_provider_configuration(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             catalog_path = root / "model-catalogs" / "custom.json"
             routing_path = root / "desktop-model-providers.json"
             toml_path = root / "config.toml"
-            toml_path.write_text('model = "cx/gpt-5.6-sol"\n', encoding="utf-8")
+            routing_contents = """{
+  "version": 1,
+  "default_provider": "openai",
+  "providers": [{"id": "openai", "label": "OpenAI"}],
+  "model_providers": {}
+}
+"""
+            toml_contents = """model = "gpt-5.6-sol"
+
+[model_providers.9router]
+name = "Keep Router"
+base_url = "https://keep.example/v1"
+wire_api = "chat"
+"""
+            routing_path.write_text(routing_contents, encoding="utf-8")
+            toml_path.write_text(toml_contents, encoding="utf-8")
             result = subprocess.CompletedProcess(
                 ["codex", "debug", "models", "--bundled"],
                 0,
@@ -137,105 +129,24 @@ class SynchronizeTests(unittest.TestCase):
             sync.synchronize(
                 "codex",
                 catalog_path,
-                routing_path,
                 toml_path,
-                "http://127.0.0.1:20128/v1",
                 command_runner=mock.Mock(return_value=result),
             )
 
             catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
-            routing = json.loads(routing_path.read_text(encoding="utf-8"))
-            self.assertEqual(len(catalog["models"]), 4)
-            self.assertEqual(routing["model_providers"]["cx/gpt-5.6-sol"], "9router")
-            self.assertIn('model = "cx/gpt-5.6-sol"', toml_path.read_text(encoding="utf-8"))
-
-    def test_prompted_base_url_uses_default_for_empty_answer(self):
-        self.assertEqual(
-            sync.prompt_base_url(input_func=lambda _: ""),
-            "http://127.0.0.1:20128/v1",
-        )
-
-    def test_invalid_base_url_is_rejected_before_writes(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            catalog_path = root / "custom.json"
-            routing_path = root / "routing.json"
-            toml_path = root / "config.toml"
-            result = subprocess.CompletedProcess(
-                ["codex", "debug", "models", "--bundled"],
-                0,
-                stdout=json.dumps(FIXTURE_CATALOG),
-                stderr="",
-            )
-
-            with self.assertRaisesRegex(sync.SyncError, "http"):
-                sync.synchronize(
-                    "codex",
-                    catalog_path,
-                    routing_path,
-                    toml_path,
-                    "not-a-url",
-                    command_runner=mock.Mock(return_value=result),
-                )
-
-            self.assertFalse(catalog_path.exists())
-            self.assertFalse(routing_path.exists())
-            self.assertFalse(toml_path.exists())
+            self.assertEqual(len(catalog["models"]), 2)
+            self.assertEqual(routing_path.read_text(encoding="utf-8"), routing_contents)
+            updated_toml = toml_path.read_text(encoding="utf-8")
+            self.assertIn('model = "gpt-5.6-sol"', updated_toml)
+            self.assertIn('[model_providers.9router]\nname = "Keep Router"', updated_toml)
 
 
-class ProviderRoutingMergeTests(unittest.TestCase):
-    def test_merge_keeps_unrelated_provider_and_model_mapping(self):
-        generated = sync.provider_routing([{"slug": "cx/gpt-5.6-sol"}])
-        existing = {
-            "version": 1,
-            "default_provider": "openai",
-            "providers": [
-                {"id": "openai", "label": "Old OpenAI"},
-                {"id": "acme", "label": "Acme", "description": "Custom"},
-            ],
-            "model_providers": {"acme/gpt-5.6-sol": "acme"},
-        }
+class SyncArgumentTests(unittest.TestCase):
+    def test_sync_arguments_do_not_include_provider_setup_options(self):
+        args = sync.parse_args([])
 
-        merged = sync.merge_provider_routing(generated, existing)
-
-        self.assertEqual(merged["default_provider"], "openai")
-        self.assertEqual(
-            [provider["id"] for provider in merged["providers"]],
-            ["openai", "9router", "acme"],
-        )
-        self.assertEqual(merged["providers"][0]["label"], "ChatGPT / OpenAI")
-        self.assertEqual(merged["model_providers"]["cx/gpt-5.6-sol"], "9router")
-        self.assertEqual(merged["model_providers"]["acme/gpt-5.6-sol"], "acme")
-
-    def test_synchronize_rejects_invalid_existing_routing_json(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            routing_path = root / "routing.json"
-            routing_path.write_text("not json", encoding="utf-8")
-            result = subprocess.CompletedProcess(
-                ["codex", "debug", "models", "--bundled"],
-                0,
-                stdout=json.dumps(FIXTURE_CATALOG),
-                stderr="",
-            )
-
-            with self.assertRaisesRegex(sync.SyncError, "provider-routing JSON"):
-                sync.synchronize(
-                    "codex",
-                    root / "catalog.json",
-                    routing_path,
-                    root / "config.toml",
-                    "http://127.0.0.1:20128/v1",
-                    command_runner=mock.Mock(return_value=result),
-                )
-
-    def test_read_provider_routing_rejects_missing_required_collections(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            routing_path = Path(temporary) / "routing.json"
-            routing_path.write_text('{"version": 1}', encoding="utf-8")
-
-            with self.assertRaisesRegex(sync.SyncError, "providers or model_providers"):
-                sync.read_provider_routing(routing_path)
+        self.assertFalse(hasattr(args, "provider_config"))
+        self.assertFalse(hasattr(args, "base_url"))
 
 
 class PatcherTemplateTests(unittest.TestCase):
