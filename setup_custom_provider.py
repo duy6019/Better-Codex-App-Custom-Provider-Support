@@ -14,8 +14,8 @@ import subprocess
 import sys
 from typing import Callable, Optional, Sequence
 
-from sync_codex_models import (
-    SyncError,
+from codex_config import (
+    ConfigError,
     atomic_write_json,
     atomic_write_text,
     codex_home,
@@ -33,7 +33,7 @@ WIRE_APIS = {"responses", "chat"}
 AUTH_METHODS = {"keychain", "credential-manager", "none"}
 
 
-class SetupError(SyncError):
+class SetupError(ConfigError):
     """A safe, expected provider-setup failure."""
 
 
@@ -342,7 +342,7 @@ def setup_provider(
     try:
         atomic_write_text(toml_path, updated_toml)
         atomic_write_json(routing_path, routing)
-    except SyncError as exc:
+    except ConfigError as exc:
         if provider.auth_method != "none":
             raise SetupError(
                 "Configuration update failed after storing secure credential entry "
@@ -402,7 +402,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         config_path = args.config.expanduser().resolve()
         routing_path = args.provider_config.expanduser().resolve()
         setup_provider(provider, config_path, routing_path, api_key=api_key)
-    except SyncError as exc:
+    except ConfigError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 

@@ -1,4 +1,5 @@
 import base64
+import importlib.util
 import json
 from pathlib import Path
 import subprocess
@@ -10,6 +11,9 @@ import setup_custom_provider as setup
 
 
 class ProviderValidationTests(unittest.TestCase):
+    def test_shared_configuration_module_exists(self):
+        self.assertIsNotNone(importlib.util.find_spec("codex_config"))
+
     def test_validate_provider_id_accepts_keychain_safe_identifier(self):
         self.assertEqual(setup.validate_provider_id("acme-router"), "acme-router")
         self.assertEqual(setup.keychain_service("acme-router"), "codex-acme-router")
