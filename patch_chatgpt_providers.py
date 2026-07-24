@@ -248,15 +248,18 @@ CENTRAL_DIFF = r"""@@ -137534,6 +137678,146 @@
 """
 
 
-PICKER_DIFF = r"""@@ -521283,2 +521283,8 @@
-           onOpenChange: G,
--          children: ee,
-+          children: (0, Kcs.jsxs)(Kcs.Fragment, {
-+            children: [
-+              (0, Kcs.jsx)(CodexCustomProviderPickerSection, {}),
-+              ee,
-+            ],
-+          }),
+PICKER_DIFF = r"""@@ -519530,6 +519530,12 @@
+       ? ((L = (0, XX.jsxs)(`div`, {
+           className: YX.SimpleView,
+-          children: [E, M, P, I],
++          children: [
++            (0, XX.jsx)(CodexCustomProviderPickerSection, {}),
++            E,
++            M,
++            P,
++            I,
++          ],
+         })),
 @@ -548655,6 +548655,204 @@
  var Xjs,
    Zjs = e(() => {
