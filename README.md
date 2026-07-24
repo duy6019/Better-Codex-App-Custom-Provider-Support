@@ -42,7 +42,8 @@ Windows Credential Manager; it does not support the desktop application patch.
 <br>
 <br>
 
-1. Download `patch_chatgpt_providers.py`, `sync_codex_models.py`, and `setup_custom_provider.py` from the repository.
+1. Download `patch_chatgpt_providers.py`, `sync_codex_models.py`,
+   `setup_custom_provider.py`, and `codex_config.py` from the repository.
 2. Run the patch script:
 
 ```bash
@@ -55,11 +56,17 @@ python3 patch_chatgpt_providers.py
 python3 sync_codex_models.py
 ```
 
+4. Add 9router or another custom provider when needed:
+
+```bash
+python3 setup_custom_provider.py
+```
+
 The installer closes processes belonging to the target app, maintains a verified clean original beside it, creates a transactional snapshot before mutation, patches `app.asar`, updates Electron's ASAR integrity metadata, and applies an ad-hoc signature.
 
 Run `python3 patch_chatgpt_providers.py --help` to see alternate app and config paths.
 
-## Sync Codex models and 9router
+## Sync Codex models
 
 Run the sync script after patching, and again whenever the bundled Codex model catalog changes:
 
@@ -67,29 +74,21 @@ Run the sync script after patching, and again whenever the bundled Codex model c
 python3 sync_codex_models.py
 ```
 
-The script asks for a 9router base URL. Press Enter to use the local default:
+Each run reads `codex debug models --bundled`, then recreates
+`~/.codex/model-catalogs/custom.json` with exactly the bundled Codex models.
+It updates only the root `model_catalog_json` entry in
+`~/.codex/config.toml`.
 
-```text
-http://127.0.0.1:20128/v1
-```
+The command does not create aliases, configure a provider, or read or modify
+`~/.codex/desktop-model-providers.json`. It preserves every provider table,
+credential setting, project setting, and global `model = ...` choice in
+`config.toml`.
 
-For an unattended run or another endpoint, pass the URL explicitly:
+Use `--catalog` and `--config` to target alternate paths, or `--codex-bin`
+when the Codex CLI has a different executable name. Run
+`python3 sync_codex_models.py --help` for details.
 
-```bash
-python3 sync_codex_models.py --9router-base-url https://router.example/v1
-```
-
-Each run reads `codex debug models --bundled` and recreates all three files:
-
-- `~/.codex/model-catalogs/custom.json`: every bundled Codex model plus a `cx/<slug>` clone labeled ` (9router)`.
-- `~/.codex/desktop-model-providers.json`: OpenAI for original slugs and 9router for every `cx/` clone.
-- `~/.codex/config.toml`: the root `model_catalog_json` entry and `[model_providers.9router]` table.
-
-The script preserves all other TOML settings, including project configuration and an existing `[model_providers.9router.auth]` table. It does not change your global `model = ...` choice. It recreates the catalog and provider-routing JSON on every run, so do not hand-edit those generated files.
-
-Use `--catalog`, `--provider-config`, and `--config` to target alternate paths, or `--codex-bin` when the Codex CLI has a different executable name. Run `python3 sync_codex_models.py --help` for details.
-
-Restart ChatGPT/Codex after synchronization so it loads the new model catalog. Do not set a global `model_provider` if OpenAI and 9router should coexist in the desktop app; choose the provider from the menu before each new task or Side Chat fork.
+Restart ChatGPT/Codex after synchronization so it loads the updated catalog.
 
 ## Add a custom provider
 
@@ -130,7 +129,8 @@ The installer creates:
 ~/.codex/desktop-model-providers.json
 ```
 
-The sync script creates this file. A shortened example:
+The patch installer creates this file with its OpenAI-only fallback. A shortened
+example:
 
 ```json
 {
@@ -141,29 +141,26 @@ The sync script creates this file. A shortened example:
       "id": "openai",
       "label": "ChatGPT / OpenAI",
       "description": "Uses your signed-in ChatGPT account"
-    },
-    {
-      "id": "9router",
-      "label": "9router",
-      "description": "Uses [model_providers.9router] from config.toml"
     }
   ],
-  "model_providers": {
-    "cx/gpt-5.6-sol": "9router",
-    "cx/gpt-5.6-terra": "9router"
-  }
+  "model_providers": {}
 }
 ```
 
 - `providers` defines the providers displayed in the app menu.
 - `default_provider` is used when the saved provider choice is missing or from an older version.
-- `model_providers` is retained in the generated file for compatibility, but the desktop patch does not use model IDs to route requests.
+- `model_providers` is retained for compatibility, but the desktop patch does not use model IDs to route requests.
 - Every custom provider ID must match a `[model_providers.<id>]` section in `config.toml`.
 - API keys do not belong in this JSON file.
 
-The provider menu is explicit: it defaults to ChatGPT / OpenAI and has no Automatic mode. Select 9router before starting a task or using Side Chat with a 9router model. The selected provider is sent for both new tasks and forks. Changing the model does not switch providers automatically.
+Run `setup_custom_provider.py` to add 9router or another provider to this file.
+The provider menu is explicit: it defaults to ChatGPT / OpenAI and has no
+Automatic mode. Select the desired provider before starting a task or using
+Side Chat. The selected provider is sent for both new tasks and forks. Changing
+the model does not switch providers automatically.
 
-The app reloads this file when the provider menu opens and before a new task starts or forks. Repatching is not required after running the sync script.
+The app reloads this file when the provider menu opens and before a new task
+starts or forks. Repatching is not required after running either setup command.
 
 ## Updates and recovery
 

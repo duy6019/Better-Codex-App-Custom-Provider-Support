@@ -30,3 +30,18 @@ class WindowsCompatibilityTests(unittest.TestCase):
         stream.flush()
 
         self.assertIn(b"-> C:\\config.toml", buffer.getvalue())
+
+    def test_patch_help_uses_ascii_borders_for_cp1252_stream(self):
+        buffer = io.BytesIO()
+        stream = io.TextIOWrapper(buffer, encoding="cp1252", errors="strict")
+        parser = patcher.FancyArgumentParser(prog="patch_chatgpt_providers.py")
+        parser.add_argument("--app", help="Target ChatGPT app")
+
+        try:
+            parser.print_help(file=stream)
+            stream.flush()
+        except UnicodeEncodeError as exc:
+            self.fail(f"CP1252 help output must use ASCII borders: {exc}")
+
+        self.assertIn(b"+", buffer.getvalue())
+        self.assertIn(b"|", buffer.getvalue())

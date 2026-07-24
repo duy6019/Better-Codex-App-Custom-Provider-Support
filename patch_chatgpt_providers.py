@@ -480,6 +480,18 @@ def terminal_detail_marker(stream: Any) -> str:
     return marker
 
 
+def terminal_box_characters(stream: Any) -> tuple[str, str, str, str]:
+    characters = ("\u256d", "\u2570", "\u2500", "\u2502")
+    encoding = getattr(stream, "encoding", None)
+    if encoding is None:
+        return characters
+    try:
+        "".join(characters).encode(encoding)
+    except (LookupError, UnicodeEncodeError):
+        return ("+", "+", "-", "|")
+    return characters
+
+
 def terminal_status(
     label: str,
     message: object,
@@ -680,13 +692,14 @@ class FancyArgumentParser(argparse.ArgumentParser):
         stream = file or sys.stdout
         width = terminal_width()
         title = " COMMAND HELP "
-        top = f"╭─{title}{'─' * max(1, width - len(title) - 2)}"
-        bottom = f"╰{'─' * (width - 1)}"
+        top_left, bottom_left, horizontal, vertical = terminal_box_characters(stream)
+        top = f"{top_left}{horizontal}{title}{horizontal * max(1, width - len(title) - 2)}"
+        bottom = f"{bottom_left}{horizontal * (width - 1)}"
         print(file=stream)
         print(color(top, "1", "36", stream=stream), file=stream)
         for raw_line in message.rstrip().splitlines():
-            border = color("│", "36", stream=stream)
             stripped = raw_line.strip()
+            border = color(vertical, "36", stream=stream)
             if not stripped:
                 print(border, file=stream)
                 continue
