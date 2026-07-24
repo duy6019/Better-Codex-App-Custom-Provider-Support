@@ -1,3 +1,4 @@
+import base64
 import json
 from pathlib import Path
 import subprocess
@@ -113,8 +114,9 @@ args = ["find-generic-password"]
         self.assertTrue(command[4].endswith("\n}"))
         self.assertEqual(command[5:], [])
 
-    def test_store_windows_api_key_encodes_special_key_inside_command(self):
+    def test_store_windows_api_key_passes_special_key_only_via_stdin(self):
         api_key = "test key & value"
+        encoded_key = base64.b64encode(api_key.encode("utf-16le")).decode("ascii")
         runner = mock.Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
 
         setup.store_api_key(
@@ -124,8 +126,10 @@ args = ["find-generic-password"]
 
         command = runner.call_args.args[0]
         self.assertNotIn(api_key, command[4])
-        self.assertIn("FromBase64String", command[4])
-        self.assertIn("Text.Encoding]::Unicode.GetString", command[4])
+        self.assertNotIn(encoded_key, command[4])
+        self.assertIn("[Console]::In.ReadToEnd()", command[4])
+        self.assertNotIn("FromBase64String", command[4])
+        self.assertEqual(runner.call_args.kwargs["input"], api_key)
 
     def test_setup_provider_does_not_store_key_for_no_auth(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import base64
 from dataclasses import dataclass
 import getpass
 import json
@@ -154,14 +153,11 @@ try {
     return script.replace("__TARGET__", powershell_single_quoted(target_name))
 
 
-def windows_credential_write_script(
-    target_name: str, username: str, api_key: str
-) -> str:
-    encoded_key = base64.b64encode(api_key.encode("utf-16le")).decode("ascii")
+def windows_credential_write_script(target_name: str, username: str) -> str:
     script = r'''& {
 $target = __TARGET__
 $username = __USERNAME__
-$apiKey = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('__API_KEY__'))
+$apiKey = [Console]::In.ReadToEnd()
 $source = @'
 using System;
 using System.Runtime.InteropServices;
@@ -194,13 +190,15 @@ try {
 } finally {
   if ($targetPointer -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::FreeCoTaskMem($targetPointer) }
   if ($usernamePointer -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::FreeCoTaskMem($usernamePointer) }
-  if ($blob -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::FreeCoTaskMem($blob) }
+  if ($blob -ne [IntPtr]::Zero) {
+    for ($index = 0; $index -lt $bytes.Length; $index++) { [Runtime.InteropServices.Marshal]::WriteByte($blob, $index, 0) }
+    [Runtime.InteropServices.Marshal]::FreeCoTaskMem($blob)
+  }
 }
 }'''
     return (
         script.replace("__TARGET__", powershell_single_quoted(target_name))
         .replace("__USERNAME__", powershell_single_quoted(username))
-        .replace("__API_KEY__", encoded_key)
     )
 
 
@@ -293,12 +291,17 @@ def store_api_key(
     if auth_method == "credential-manager":
         command = [
             "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
-            windows_credential_write_script(
-                keychain_service(provider_id), provider_id, api_key
-            ),
+            windows_credential_write_script(keychain_service(provider_id), provider_id),
         ]
         try:
-            command_runner(command, check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            command_runner(
+                command,
+                input=api_key,
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
         except (FileNotFoundError, subprocess.CalledProcessError) as exc:
             raise SetupError(
                 f"Could not store Windows Credential Manager entry '{keychain_service(provider_id)}'"
