@@ -58,6 +58,15 @@ class WindowsStoreDiscoveryTests(unittest.TestCase):
             with self.assertRaisesRegex(patcher.PatchError, "SignTool"):
                 patcher.find_windows_sdk_tools(search_roots=(root,))
 
+    def test_sdk_preflight_rejects_directory_named_makeappx(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "MakeAppx.exe").mkdir()
+            (root / "SignTool.exe").write_bytes(b"")
+
+            with self.assertRaisesRegex(patcher.PatchError, "MakeAppx"):
+                patcher.find_windows_sdk_tools(search_roots=(root,))
+
     def test_sdk_preflight_scans_later_roots_for_a_complete_tool_pair(self):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
