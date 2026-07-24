@@ -248,17 +248,36 @@ CENTRAL_DIFF = r"""@@ -137534,6 +137678,146 @@
 """
 
 
-PICKER_DIFF = r"""@@ -519530,6 +519530,12 @@
-       ? ((L = (0, XX.jsxs)(`div`, {
-           className: YX.SimpleView,
--          children: [E, M, P, I],
-+          children: [
-+            (0, XX.jsx)(CodexCustomProviderPickerSection, {}),
-+            E,
-+            M,
-+            P,
-+            I,
-+          ],
+PICKER_DIFF = r"""@@ -520216,8 +520216,13 @@
+   t[43] === r.model
+     ? (ie = t[44])
+-    : ((ie = r.model == null ? null : (0, $X.jsx)($ss, { submenu: r.model })),
++    : ((ie =
++        r.model == null
++          ? null
++          : (0, $X.jsx)($ss, {
++              submenu: r.model,
++              providerPicker: !0,
++            })),
+       (t[43] = r.model),
+       (t[44] = ie));
+@@ -520323,10 +520328,17 @@
+       ? ((u = (0, $X.jsx)(Cos, {
+           ariaLabel: r,
+           contentClassName: i,
+           disabled: a,
+           flyoutHeader: o,
+           label: s,
+           value: c,
+-          children: l,
++          children: e.providerPicker
++            ? (0, $X.jsxs)($X.Fragment, {
++                children: [
++                  (0, $X.jsx)(CodexCustomProviderPickerSection, {}),
++                  l,
++                ],
++              })
++            : l,
          })),
 @@ -548655,6 +548655,204 @@
  var Xjs,
