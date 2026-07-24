@@ -37,7 +37,16 @@ import zipfile
 PATCH_MARKER = b"__codexDesktopModelProvidersPatchV2"
 ASAR_PACKAGE = "@electron/asar@3.2.10"
 PRETTIER_PACKAGE = "prettier@3.6.2"
+# The current Microsoft Store ChatGPT package uses the Codex identity.  Keep
+# the prior identity during the transition so an already-installed supported
+# Store release can still be refreshed, but never search arbitrary packages.
+WINDOWS_STORE_PACKAGE_NAMES = ("OpenAI.Codex", "OpenAI.ChatGPT")
+# Used only when recovering metadata created by an earlier script release.
 WINDOWS_STORE_PACKAGE_NAME = "OpenAI.ChatGPT"
+WINDOWS_STORE_ASAR_RELATIVE_PATHS = (
+    Path("app") / "resources" / "app.asar",
+    Path("resources") / "app.asar",
+)
 BUILD_5828_BUNDLE_MARKERS = (
     "async prewarmThreadStart(",
     "async sendConfigReadRequest(",
@@ -827,6 +836,23 @@ class WindowsPatchPaths:
     previous: Path
 
 
+def windows_package_asar_path(layout: Path, *, package_label: str) -> Path:
+    """Return the unique ASAR from one of the supported Store layouts."""
+
+    candidates = tuple(
+        layout / relative_path
+        for relative_path in WINDOWS_STORE_ASAR_RELATIVE_PATHS
+        if (layout / relative_path).is_file()
+    )
+    if len(candidates) != 1:
+        locations = ", ".join(path.as_posix() for path in WINDOWS_STORE_ASAR_RELATIVE_PATHS)
+        raise PatchError(
+            f"{package_label} must contain exactly one ASAR at a supported location: "
+            f"{locations}"
+        )
+    return candidates[0]
+
+
 def windows_patch_paths(local_app_data: Path) -> WindowsPatchPaths:
     root = local_app_data / "Codex" / "ChatGPTProviderPatch"
     return WindowsPatchPaths(
@@ -844,9 +870,12 @@ def discover_windows_store_package(command_runner: Any) -> WindowsStorePackage:
         "-NonInteractive",
         "-Command",
         (
-            f"Get-AppxPackage -Name '{WINDOWS_STORE_PACKAGE_NAME}' | "
+            "@(" + "; ".join(
+                f"Get-AppxPackage -Name '{name}'" for name in WINDOWS_STORE_PACKAGE_NAMES
+            ) + ") | "
             "Select-Object Name, PackageFullName, PackageFamilyName, Version, "
-            "Architecture, InstallLocation | ConvertTo-Json -Compress"
+            "@{Name='Architecture'; Expression={$_.Architecture.ToString()}}, "
+            "InstallLocation | ConvertTo-Json -Compress"
         ),
     ]
     result = command_runner(command)
@@ -875,15 +904,18 @@ def discover_windows_store_package(command_runner: Any) -> WindowsStorePackage:
             raise PatchError(f"Windows Store package is missing {field}")
         values[attribute] = value.strip()
 
+    if values["name"] not in WINDOWS_STORE_PACKAGE_NAMES:
+        raise PatchError("Windows Store package identity is unsupported")
+
     install_location = Path(values["install_location"])
     manifest_path = install_location / "AppxManifest.xml"
-    asar_candidates = tuple(install_location.glob("resources/app.asar"))
     if not install_location.is_dir():
         raise PatchError(f"Windows Store package layout is unreadable: {install_location}")
     if not manifest_path.is_file():
         raise PatchError(f"Windows Store package is missing manifest: {manifest_path}")
-    if len(asar_candidates) != 1 or not asar_candidates[0].is_file():
-        raise PatchError("Windows Store package must contain exactly one resources/app.asar")
+    asar_path = windows_package_asar_path(
+        install_location, package_label="Windows Store package"
+    )
 
     return WindowsStorePackage(
         name=values["name"],
@@ -893,7 +925,7 @@ def discover_windows_store_package(command_runner: Any) -> WindowsStorePackage:
         architecture=values["architecture"],
         install_location=install_location,
         manifest_path=manifest_path,
-        asar_path=asar_candidates[0],
+        asar_path=asar_path,
     )
 
 
@@ -920,6 +952,14 @@ def find_windows_sdk_tools(search_roots: Sequence[Path]) -> WindowsToolPaths:
     if missing_tool_error is not None:
         raise missing_tool_error
     raise PatchError("Windows SDK tools not found: MakeAppx.exe and SignTool.exe")
+
+
+def find_windows_node_tools() -> None:
+    missing = tuple(tool for tool in ("node", "npx") if shutil.which(tool) is None)
+    if missing:
+        raise PatchError(
+            "Node.js tools not found on PATH: " + ", ".join(missing)
+        )
 
 
 def windows_package_identity(
@@ -1037,12 +1077,18 @@ def _run_windows_package_command(command_runner: Any, command: list[str]) -> Non
 
 
 def update_windows_asar_integrity(layout: Path, asar_path: Path) -> None:
-    integrity_path = layout / "resources" / "asar-integrity.json"
+    integrity_path = asar_path.with_name("asar-integrity.json")
     if not integrity_path.is_file():
         return
     try:
         integrity = json.loads(integrity_path.read_text(encoding="utf-8"))
-        asar_entry = integrity["resources/app.asar"]
+        relative_asar_path = asar_path.relative_to(layout).as_posix()
+        integrity_key = (
+            relative_asar_path
+            if relative_asar_path in integrity
+            else "resources/app.asar"
+        )
+        asar_entry = integrity[integrity_key]
         if not isinstance(asar_entry, dict):
             raise TypeError("ASAR entry is not an object")
         asar_entry["hash"] = asar_header_hash(asar_path)
@@ -1065,7 +1111,9 @@ def build_windows_patched_msix(
     certificate: WindowsSigningCertificate,
     command_runner: Any,
 ) -> Path:
-    source_asar = original_layout / "resources" / "app.asar"
+    source_asar = windows_package_asar_path(
+        original_layout, package_label="Clean Windows Store payload"
+    )
     if contains_marker(source_asar):
         raise PatchError("The clean original Windows payload is already patched")
 
@@ -1078,7 +1126,9 @@ def build_windows_patched_msix(
     except OSError as exc:
         raise PatchError("Could not copy the clean Windows package layout") from exc
 
-    copied_asar = layout / "resources" / "app.asar"
+    copied_asar = windows_package_asar_path(
+        layout, package_label="Copied Windows Store payload"
+    )
     _run_windows_package_command(
         command_runner,
         ["npx", "--yes", ASAR_PACKAGE, "extract", str(copied_asar), str(extracted)],
@@ -1318,16 +1368,9 @@ def _validate_windows_store_layout(
             "Windows Store package full name does not match its architecture"
         )
 
-    asar_candidates = tuple(
-        candidate
-        for candidate in (layout / "resources").glob("app.asar")
-        if candidate.is_file()
-    ) if (layout / "resources").is_dir() else ()
-    if len(asar_candidates) != 1:
-        raise PatchError(
-            "Windows Store package must contain exactly one resources/app.asar"
-        )
-    asar_path = asar_candidates[0]
+    asar_path = windows_package_asar_path(
+        layout, package_label="Windows Store package"
+    )
     try:
         marked = contains_marker(asar_path)
     except OSError as exc:
@@ -1872,9 +1915,13 @@ def _windows_query_script_for_identity(
     )
     lines.extend(
         [
-            "$asar = Join-Path $custom.InstallLocation 'resources\\app.asar'",
-            "if (-not (Test-Path -LiteralPath $asar -PathType Leaf)) { "
-            "throw 'Custom package ASAR is missing' }",
+            "$asarCandidates = @(",
+            "  (Join-Path $custom.InstallLocation 'app\\resources\\app.asar'),",
+            "  (Join-Path $custom.InstallLocation 'resources\\app.asar')",
+            ") | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }",
+            "if (@($asarCandidates).Count -ne 1) { "
+            "throw 'Custom package ASAR is missing or ambiguous' }",
+            "$asar = @($asarCandidates)[0]",
             f"$marker = '{marker}'",
             "$bytes = [System.IO.File]::ReadAllBytes($asar)",
             "$text = [System.Text.Encoding]::GetEncoding(28591).GetString($bytes)",
@@ -2176,15 +2223,14 @@ def _verify_windows_custom_package(
     if not isinstance(install_location, str) or not install_location.strip():
         raise PatchError("The custom Windows package registration omitted InstallLocation")
     install = Path(install_location)
-    asar_candidates = tuple(
-        candidate
-        for candidate in (install / "resources").glob("app.asar")
-        if candidate.is_file()
-    ) if (install / "resources").is_dir() else ()
-    if len(asar_candidates) != 1:
-        raise PatchError("The installed custom Windows package has no unique ASAR")
     try:
-        if not contains_marker(asar_candidates[0]):
+        asar_path = windows_package_asar_path(
+            install, package_label="The installed custom Windows package"
+        )
+    except PatchError as exc:
+        raise PatchError("The installed custom Windows package has no unique ASAR") from exc
+    try:
+        if not contains_marker(asar_path):
             raise PatchError("The installed custom Windows ASAR is missing the patch marker")
     except OSError as exc:
         raise PatchError("Could not inspect the installed custom Windows ASAR") from exc
@@ -2527,6 +2573,7 @@ def patch_windows_store_app(
             f"{paths.previous}"
         )
     tools = find_windows_sdk_tools(_windows_sdk_search_roots())
+    find_windows_node_tools()
     certificate = windows_signing_certificate(command_runner)
     ensure_windows_original(package, paths, command_runner=command_runner)
     paths.root.mkdir(parents=True, exist_ok=True)

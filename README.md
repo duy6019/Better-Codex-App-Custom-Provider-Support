@@ -38,6 +38,7 @@ Windows Credential Manager.
 - ChatGPT installed from the Microsoft Store. Other Windows distributions are
   unsupported.
 - Python 3.9 or newer
+- Node.js with `node` and `npx` available on `PATH`
 - Windows SDK with `MakeAppx.exe` and `SignTool.exe` available
 - An elevated PowerShell session for the first run, so the local public
   signing certificate can be trusted and the Store payload can be read
@@ -88,8 +89,8 @@ Run `python3 patch_chatgpt_providers.py --help` to see alternate app and config 
 
 ### Windows Microsoft Store
 
-1. Install ChatGPT from the Microsoft Store first, then install the Windows SDK
-   tools listed above.
+1. Install ChatGPT from the Microsoft Store first, then install Node.js and the
+   Windows SDK tools listed above.
 2. Open an elevated PowerShell session in the directory containing the scripts
    and run:
 

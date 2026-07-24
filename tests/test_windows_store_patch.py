@@ -50,6 +50,60 @@ class WindowsStoreDiscoveryTests(unittest.TestCase):
             )
         self.assertEqual(result.asar_path, install / "resources" / "app.asar")
 
+    def test_discovers_current_store_package_with_nested_app_asar(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            install = Path(temporary) / "OpenAI.Codex"
+            (install / "app" / "resources").mkdir(parents=True)
+            (install / "app" / "resources" / "app.asar").write_bytes(b"clean")
+            (install / "AppxManifest.xml").write_text("<Package />", encoding="utf-8")
+            payload = json.dumps(
+                {
+                    "Name": "OpenAI.Codex",
+                    "PackageFullName": "OpenAI.Codex_26.721.3996.0_x64__2p2nqsd0c76g0",
+                    "PackageFamilyName": "OpenAI.Codex_2p2nqsd0c76g0",
+                    "Version": "26.721.3996.0",
+                    "Architecture": "X64",
+                    "InstallLocation": str(install),
+                }
+            )
+            commands = []
+            result = patcher.discover_windows_store_package(
+                command_runner=lambda command: commands.append(command)
+                or completed(command, payload)
+            )
+
+        self.assertEqual(result.name, "OpenAI.Codex")
+        self.assertEqual(result.asar_path, install / "app" / "resources" / "app.asar")
+        script = commands[0][-1]
+        self.assertIn(
+            "Get-AppxPackage -Name 'OpenAI.Codex'; "
+            "Get-AppxPackage -Name 'OpenAI.ChatGPT'",
+            script,
+        )
+        self.assertIn("$_.Architecture.ToString()", script)
+
+    def test_rejects_a_package_outside_the_store_identity_allowlist(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            install = Path(temporary) / "other"
+            (install / "resources").mkdir(parents=True)
+            (install / "resources" / "app.asar").write_bytes(b"clean")
+            (install / "AppxManifest.xml").write_text("<Package />", encoding="utf-8")
+            payload = json.dumps(
+                {
+                    "Name": "Example.ChatGPT",
+                    "PackageFullName": "Example.ChatGPT_1.2.3.4_x64__example",
+                    "PackageFamilyName": "Example.ChatGPT_example",
+                    "Version": "1.2.3.4",
+                    "Architecture": "X64",
+                    "InstallLocation": str(install),
+                }
+            )
+
+            with self.assertRaisesRegex(patcher.PatchError, "identity is unsupported"):
+                patcher.discover_windows_store_package(
+                    command_runner=lambda command: completed(command, payload)
+                )
+
     def test_rejects_zero_or_multiple_store_packages(self):
         for stdout in ("", json.dumps([{"Name": "OpenAI.ChatGPT"}] * 2)):
             with self.subTest(stdout=stdout):
@@ -89,8 +143,13 @@ class WindowsStoreDiscoveryTests(unittest.TestCase):
                 search_roots=(incomplete_root, complete_root)
             )
 
-            self.assertEqual(tools.makeappx, complete_root / "MakeAppx.exe")
-            self.assertEqual(tools.signtool, complete_root / "SignTool.exe")
+        self.assertEqual(tools.makeappx, complete_root / "MakeAppx.exe")
+        self.assertEqual(tools.signtool, complete_root / "SignTool.exe")
+
+    def test_node_preflight_requires_node_and_npx_on_path(self):
+        with mock.patch.object(patcher.shutil, "which", return_value=None):
+            with self.assertRaisesRegex(patcher.PatchError, "Node.js tools"):
+                patcher.find_windows_node_tools()
 
 
 class WindowsPackageBuildTests(unittest.TestCase):
@@ -1134,6 +1193,7 @@ class WindowsRollbackTests(unittest.TestCase):
                 mock.patch.object(
                     patcher, "find_windows_sdk_tools", return_value=tools
                 ),
+                mock.patch.object(patcher, "find_windows_node_tools"),
                 mock.patch.object(
                     patcher,
                     "windows_signing_certificate",
@@ -1883,6 +1943,7 @@ class DocumentationTests(unittest.TestCase):
         self.assertIn("Microsoft Store", readme)
         self.assertIn("MakeAppx", readme)
         self.assertIn("SignTool", readme)
+        self.assertIn("Node.js", readme)
         self.assertIn("Developer Mode is not required", readme)
         self.assertIn("run the patcher again", readme)
         self.assertIn("official Store app is not modified", readme)
