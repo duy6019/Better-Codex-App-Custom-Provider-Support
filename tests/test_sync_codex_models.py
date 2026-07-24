@@ -277,7 +277,11 @@ class PatcherTemplateTests(unittest.TestCase):
         self.assertNotIn("patch-failed", source)
 
     def test_provider_picker_renders_subcomponents_from_menu_namespace(self):
-        hunk = patcher.parse_hunks(patcher.PICKER_DIFF)[0]
+        hunk = next(
+            hunk
+            for hunk in patcher.parse_hunks(patcher.PICKER_DIFF)
+            if any("function codexPickerProviderRoutingFallback" in line for line in hunk)
+        )
         diff = "@@ -1,1 +1,1 @@\n" + "\n".join(hunk) + "\n"
         source = "\n".join(line[1:] for line in hunk if line[0] in " -") + "\n"
 
@@ -296,8 +300,34 @@ class PatcherTemplateTests(unittest.TestCase):
             self.assertIn(f"KR.{component}", provider_section)
             self.assertNotIn(f"yz.{component}", provider_section)
 
+    def test_provider_picker_is_wrapped_into_all_top_level_model_menus(self):
+        self.assertNotIn(
+            """          children: [
+            (0, TQ.jsx)(CodexCustomProviderPickerSection, {}),
+            m,""",
+            patcher.PICKER_DIFF,
+        )
+        self.assertIn(
+            """+          children: (0, TQ.jsxs)(TQ.Fragment, {
++            children: [
++              (0, TQ.jsx)(CodexCustomProviderPickerSection, {}),
++              ye,""",
+            patcher.PICKER_DIFF,
+        )
+        self.assertIn(
+            """+          children: (0, Kcs.jsxs)(Kcs.Fragment, {
++            children: [
++              (0, Kcs.jsx)(CodexCustomProviderPickerSection, {}),
++              ee,""",
+            patcher.PICKER_DIFF,
+        )
+
     def test_picker_import_hunk_tolerates_added_upstream_initializers(self):
-        hunk = patcher.parse_hunks(patcher.PICKER_DIFF)[2]
+        hunk = next(
+            hunk
+            for hunk in patcher.parse_hunks(patcher.PICKER_DIFF)
+            if any("CodexProviderPatchReact = r(o(), 1)" in line for line in hunk)
+        )
         diff = "@@ -1,1 +1,1 @@\n" + "\n".join(hunk) + "\n"
         source = """}
 var eMs,

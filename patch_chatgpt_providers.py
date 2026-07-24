@@ -248,7 +248,16 @@ CENTRAL_DIFF = r"""@@ -137534,6 +137678,146 @@
 """
 
 
-PICKER_DIFF = r"""@@ -548655,6 +548655,204 @@
+PICKER_DIFF = r"""@@ -521283,2 +521283,8 @@
+           onOpenChange: G,
+-          children: ee,
++          children: (0, Kcs.jsxs)(Kcs.Fragment, {
++            children: [
++              (0, Kcs.jsx)(CodexCustomProviderPickerSection, {}),
++              ee,
++            ],
++          }),
+@@ -548655,6 +548655,204 @@
  var Xjs,
    Zjs = e(() => {
      (Ho(),
@@ -457,13 +466,15 @@ PICKER_DIFF = r"""@@ -548655,6 +548655,204 @@
  function Qjs(e) {
    let t = (0, eMs.c)(164),
      {
-@@ -548925,6 +549036,1 @@
-       : ((g = (0, TQ.jsxs)(TQ.Fragment, {
-           children: [
-+            (0, TQ.jsx)(CodexCustomProviderPickerSection, {}),
-             m,
-             (0, TQ.jsx)(`div`, {
-               className: `vertical-scroll-fade-mask flex max-h-[250px] flex-col overflow-y-auto`,
+@@ -549830,1 +549830,7 @@
+           triggerButton: N,
+-          children: ye,
++          children: (0, TQ.jsxs)(TQ.Fragment, {
++            children: [
++              (0, TQ.jsx)(CodexCustomProviderPickerSection, {}),
++              ye,
++            ],
++          }),
 @@ -549575,6 +549577,8 @@
  }
  var eMs,
