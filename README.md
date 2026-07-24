@@ -44,7 +44,7 @@ Windows Credential Manager.
   signing certificate can be trusted and the Store payload can be read
 
 Developer Mode is not required. Organizational sideloading policy can still
-block installation of the separately signed package.
+block installation of the locally signed replacement package.
 
 ## Install
 
@@ -105,10 +105,17 @@ py sync_codex_models.py
 py setup_custom_provider.py
 ```
 
-The official Store app is not modified. The patcher copies and validates its
-payload, builds and signs a separate custom package, then leaves that patched
-package available to launch. It stores the clean source, active package, and
-any recovery snapshot under `%LOCALAPPDATA%\Codex\ChatGPTProviderPatch`.
+The patcher first copies and validates the current Store payload as its clean
+`original` backup. It then builds a locally signed update in the **same package
+family** and replaces the registered ChatGPT package in place; it never writes
+inside `WindowsApps` or changes its ACLs. Close ChatGPT before running it unless
+you deliberately pass `--allow-running`. The clean source, active package, and
+any recovery snapshot live under `%LOCALAPPDATA%\Codex\ChatGPTProviderPatch`.
+
+The first replacement creates a local trusted signing certificate whose subject
+matches the Store manifest publisher. This is what lets Windows treat the
+patched package as an update rather than a second app. The app's displayed
+identity and its package-family-scoped settings are retained.
 
 Do not pass `--app` or `--reapply-from` on Windows: those options are for the
 macOS app-bundle flow.
@@ -235,10 +242,11 @@ The installer migrates a valid legacy `~/.codex/ChatGPT-original.app` into the s
 
 ### Windows Microsoft Store
 
-The Store app can update independently of the custom patched package. After a
-Store update, run the patcher again to create a new patched package from the
-new Store payload. If strict validation rejects that payload, the previous
-patched package remains active and the official Store app remains unchanged.
+The patch replaces the registered Store package with a locally signed package
+from the same family. A future Store update or a Store repair can overwrite the
+patch. After a Store update, run the patcher again. It refreshes `original`
+from the new clean Store payload before it builds the next replacement. If
+strict validation rejects that payload, the active patch remains in place.
 
 Windows transaction state lives under:
 
@@ -249,17 +257,21 @@ Windows transaction state lives under:
 ```
 
 `original` is the validated, unmodified Store source. `active` is the locally
-signed patched package. `previous` is retained as recovery evidence while a
-deployment is unresolved. If the patcher reports that automatic recovery was
-intentionally refused, do not delete `previous`; resolve the reported package
-state manually, then run the patcher again.
+signed in-place replacement. `previous` is retained while replacing an earlier
+patch. Before any replacement, the installer also builds a clean local recovery
+MSIX from `original`; a failure after deployment begins restores that clean
+content automatically. This recovery package necessarily has the local
+signature, not the original Microsoft Store signature. To return to the exact
+Store-signed package, uninstall/repair ChatGPT from Microsoft Store, then run
+the patcher again if desired. If the patcher reports that recovery was refused,
+do not delete `previous`; resolve the reported package state manually first.
 
 ## Disclaimer
 
 Use this script entirely at your own risk. On macOS it modifies the installed
 ChatGPT application in an unofficial and unsupported way. On Windows it
-installs a separate, locally signed package; the official Store app is not
-modified.
+replaces the registered Store package with a locally signed package in the same
+package family; the protected `WindowsApps` files and ACLs are not edited.
 
 The author and contributors provide no warranty and accept no responsibility or liability for any problems, damage, or loss caused directly or indirectly by using this script. This includes, but is not limited to, lost or corrupted chat history or other data, an unusable or "bricked" application, account warnings or restrictions, account suspension or banning, security or privacy issues, and any other direct or consequential damage.
 

@@ -1175,6 +1175,12 @@ def npx_executable() -> str:
 def windows_package_identity(
     store_package_name: str, version: str, publisher: str
 ) -> WindowsPackageIdentity:
+    """Return the legacy side-by-side package identity.
+
+    Kept for recovery of installations made by the first Windows adapter. New
+    installations use ``windows_store_replacement_identity`` instead.
+    """
+
     return WindowsPackageIdentity(
         name=f"{store_package_name}.CodexPatch",
         publisher=publisher,
@@ -1182,11 +1188,57 @@ def windows_package_identity(
     )
 
 
-def windows_signing_certificate(command_runner: Any) -> WindowsSigningCertificate:
+def next_windows_package_version(version: str) -> str:
+    """Return the smallest valid MSIX version greater than ``version``."""
+
+    parts = version.split(".")
+    if (
+        len(parts) != 4
+        or any(re.fullmatch(r"[0-9]+", part) is None for part in parts)
+    ):
+        raise PatchError(f"Windows package version is invalid: {version}")
+    values = [int(part) for part in parts]
+    if any(value > 65535 for value in values):
+        raise PatchError(f"Windows package version is invalid: {version}")
+    for index in range(3, -1, -1):
+        if values[index] < 65535:
+            values[index] += 1
+            for reset_index in range(index + 1, 4):
+                values[reset_index] = 0
+            return ".".join(str(value) for value in values)
+    raise PatchError("Windows package version cannot be incremented")
+
+
+def windows_store_replacement_identity(
+    manifest_path: Path, package_name: str, version: str
+) -> WindowsPackageIdentity:
+    """Keep the Store package family while assigning a new full identity."""
+
+    _root, identity = _windows_identity_element(Path(manifest_path))
+    manifest_name = identity.get("Name")
+    publisher = identity.get("Publisher")
+    if manifest_name != package_name:
+        raise PatchError(
+            "Windows Store package manifest identity does not match the package name"
+        )
+    if not isinstance(publisher, str) or not publisher.strip():
+        raise PatchError("Windows Store package manifest identity has no Publisher")
+    # Validate before returning it, even when the caller keeps the original
+    # source version for an offline recovery artifact.
+    next_windows_package_version(version)
+    return WindowsPackageIdentity(package_name, publisher.strip(), version)
+
+
+def windows_signing_certificate(
+    command_runner: Any, *, subject: str = "CN=Codex Provider Patch"
+) -> WindowsSigningCertificate:
+    if not subject.strip():
+        raise PatchError("Windows package signing subject is empty")
+    escaped_subject = subject.replace("'", "''")
     script = textwrap.dedent(
         """\
         $ErrorActionPreference = 'Stop'
-        $subject = 'CN=Codex Provider Patch'
+        $subject = '__CODEX_PROVIDER_PATCH_SUBJECT__'
         $codeSigningOid = '1.3.6.1.5.5.7.3.3'
         $certificate = Get-ChildItem -Path Cert:\\CurrentUser\\My |
             Where-Object {
@@ -1219,7 +1271,7 @@ def windows_signing_certificate(command_runner: Any) -> WindowsSigningCertificat
             Thumbprint = $certificate.Thumbprint
         } | ConvertTo-Json -Compress
         """
-    )
+    ).replace("__CODEX_PROVIDER_PATCH_SUBJECT__", escaped_subject)
     command = [
         "powershell.exe",
         "-NoProfile",
@@ -1349,6 +1401,10 @@ def build_windows_patched_msix(
     tools: WindowsToolPaths,
     certificate: WindowsSigningCertificate,
     command_runner: Any,
+    *,
+    identity: WindowsPackageIdentity | None = None,
+    output_name: str = "ChatGPT-CodexPatch.msix",
+    apply_patch: bool = True,
 ) -> Path:
     source_asar = windows_package_asar_path(
         original_layout, package_label="Clean Windows Store payload"
@@ -1358,7 +1414,7 @@ def build_windows_patched_msix(
 
     layout = work / "layout"
     extracted = work / "app"
-    output = work / "ChatGPT-CodexPatch.msix"
+    output = work / output_name
     try:
         work.mkdir(parents=True, exist_ok=True)
         shutil.copytree(original_layout, layout)
@@ -1368,43 +1424,50 @@ def build_windows_patched_msix(
     copied_asar = windows_package_asar_path(
         layout, package_label="Copied Windows Store payload"
     )
-    _run_windows_package_command(
-        command_runner,
-        [
-            npx_executable(),
-            "--yes",
-            ASAR_PACKAGE,
-            "extract",
-            str(copied_asar),
-            str(extracted),
-        ],
-    )
-    bundle = current_patch_bundle(extracted / "webview" / "assets")
-    patch_current_bundle(bundle)
-    _run_windows_package_command(
-        command_runner,
-        [
-            npx_executable(),
-            "--yes",
-            ASAR_PACKAGE,
-            "pack",
-            str(extracted),
-            str(copied_asar),
-        ],
-    )
-    if not contains_marker(copied_asar):
-        raise PatchError("Packed Windows ASAR does not contain the patch marker")
+    if apply_patch:
+        _run_windows_package_command(
+            command_runner,
+            [
+                npx_executable(),
+                "--yes",
+                ASAR_PACKAGE,
+                "extract",
+                str(copied_asar),
+                str(extracted),
+            ],
+        )
+        bundle = current_patch_bundle(extracted / "webview" / "assets")
+        patch_current_bundle(bundle)
+        _run_windows_package_command(
+            command_runner,
+            [
+                npx_executable(),
+                "--yes",
+                ASAR_PACKAGE,
+                "pack",
+                str(extracted),
+                str(copied_asar),
+            ],
+        )
+        if not contains_marker(copied_asar):
+            raise PatchError("Packed Windows ASAR does not contain the patch marker")
+    elif contains_marker(copied_asar):
+        raise PatchError("Windows recovery package source is already patched")
 
     update_windows_asar_integrity(layout, copied_asar)
     manifest_path = layout / "AppxManifest.xml"
     try:
+        # package.json belongs to the patcher's local backup state, never to
+        # the generated app package.
+        state_metadata = layout / "package.json"
+        if state_metadata.exists():
+            state_metadata.unlink()
         manifest_path.write_text(
             rewrite_windows_manifest_identity(
                 manifest_path.read_text(encoding="utf-8"),
-                windows_package_identity(
-                    package.name,
-                    package.version,
-                    certificate.subject,
+                identity
+                or windows_package_identity(
+                    package.name, package.version, certificate.subject
                 ),
             ),
             encoding="utf-8",
@@ -1435,6 +1498,53 @@ def build_windows_patched_msix(
         [str(tools.signtool), "verify", "/pa", "/v", str(output)],
     )
     return output
+
+
+def build_windows_store_replacement_msix(
+    package: WindowsStorePackage,
+    original_layout: Path,
+    work: Path,
+    tools: WindowsToolPaths,
+    certificate: WindowsSigningCertificate,
+    command_runner: Any,
+    identity: WindowsPackageIdentity,
+) -> Path:
+    """Build a patched MSIX that updates the Store package family in place."""
+
+    return build_windows_patched_msix(
+        package,
+        original_layout,
+        work,
+        tools,
+        certificate,
+        command_runner,
+        identity=identity,
+        output_name="ChatGPT-ProviderPatch.msix",
+    )
+
+
+def build_windows_store_recovery_msix(
+    package: WindowsStorePackage,
+    original_layout: Path,
+    work: Path,
+    tools: WindowsToolPaths,
+    certificate: WindowsSigningCertificate,
+    command_runner: Any,
+    identity: WindowsPackageIdentity,
+) -> Path:
+    """Build a clean, locally signed fallback before replacing the Store app."""
+
+    return build_windows_patched_msix(
+        package,
+        original_layout,
+        work,
+        tools,
+        certificate,
+        command_runner,
+        identity=identity,
+        output_name="ChatGPT-StoreRecovery.msix",
+        apply_patch=False,
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -1725,6 +1835,57 @@ def ensure_windows_original(
     finally:
         if not preserve_staging:
             shutil.rmtree(staging, ignore_errors=True)
+
+
+def _windows_original_identity(
+    paths: WindowsPatchPaths, package: WindowsStorePackage
+) -> WindowsPackageIdentity:
+    """Validate and return the immutable identity of the clean backup."""
+
+    metadata = _windows_metadata(paths.original)
+    if metadata.get("name") != package.name:
+        raise PatchError("Windows clean original does not match the Store package name")
+    if metadata.get("package_family_name") != package.package_family_name:
+        raise PatchError("Windows clean original does not match the Store package family")
+    manifest = paths.original / "AppxManifest.xml"
+    _root, identity = _windows_identity_element(manifest)
+    name = identity.get("Name")
+    publisher = identity.get("Publisher")
+    version = identity.get("Version")
+    if name != package.name or not isinstance(publisher, str) or not publisher.strip():
+        raise PatchError("Windows clean original has an invalid package identity")
+    if not isinstance(version, str) or not version.strip():
+        raise PatchError("Windows clean original has an invalid package version")
+    asar = windows_package_asar_path(
+        paths.original, package_label="Windows clean original"
+    )
+    if contains_marker(asar):
+        raise PatchError("Windows clean original is already patched")
+    return WindowsPackageIdentity(name, publisher.strip(), version.strip())
+
+
+def ensure_windows_store_source(
+    package: WindowsStorePackage,
+    paths: WindowsPatchPaths,
+    *,
+    command_runner: Any | None = None,
+) -> Path:
+    """Refresh a clean Store source unless the current registration is ours."""
+
+    try:
+        installed_is_patched = contains_marker(package.asar_path)
+    except OSError as exc:
+        raise PatchError("Could not inspect the registered Windows Store ASAR") from exc
+    if installed_is_patched:
+        if not paths.original.exists():
+            raise PatchError(
+                "The registered Windows package is already patched and no clean "
+                "original backup is available. Reinstall ChatGPT from Microsoft Store "
+                "before patching again."
+            )
+        _windows_original_identity(paths, package)
+        return paths.original
+    return ensure_windows_original(package, paths, command_runner=command_runner)
 
 
 def _windows_metadata(path: Path) -> dict[str, Any]:
@@ -2154,6 +2315,7 @@ def _windows_query_script_for_identity(
     expected_family_name: str = "",
     expected_publisher: str = "",
     expected_version: str = "",
+    require_patch_marker: bool = True,
 ) -> str:
     marker = PATCH_MARKER.decode().replace("'", "''")
     lines = ["$ErrorActionPreference = 'Stop'"]
@@ -2166,8 +2328,9 @@ def _windows_query_script_for_identity(
             expected_version=expected_version,
         )
     )
-    lines.extend(
-        [
+    if require_patch_marker:
+        lines.extend(
+            [
             "$asarCandidates = @(",
             "  (Join-Path $custom.InstallLocation 'app\\resources\\app.asar'),",
             "  (Join-Path $custom.InstallLocation 'resources\\app.asar')",
@@ -2180,9 +2343,11 @@ def _windows_query_script_for_identity(
             "$text = [System.Text.Encoding]::GetEncoding(28591).GetString($bytes)",
             "if (-not $text.Contains($marker)) { "
             "throw 'Custom package ASAR marker is missing' }",
-            "$custom | Select-Object Name, PackageFullName, PackageFamilyName, "
-            "Publisher, Version, InstallLocation | ConvertTo-Json -Compress",
-        ]
+            ]
+        )
+    lines.append(
+        "$custom | Select-Object Name, PackageFullName, PackageFamilyName, "
+        "Publisher, Version, InstallLocation | ConvertTo-Json -Compress"
     )
     return "\n".join(lines)
 
@@ -2335,6 +2500,7 @@ def _query_windows_custom_package(
     expected_family_name: str = "",
     expected_publisher: str = "",
     expected_version: str = "",
+    require_patch_marker: bool = True,
 ) -> dict[str, Any]:
     command = _windows_powershell_command(
         _windows_query_script_for_identity(
@@ -2343,6 +2509,7 @@ def _query_windows_custom_package(
             expected_family_name=expected_family_name,
             expected_publisher=expected_publisher,
             expected_version=expected_version,
+            require_patch_marker=require_patch_marker,
         )
     )
     try:
@@ -2798,6 +2965,335 @@ def deploy_windows_msix(
         raise
 
 
+def _windows_inplace_update_script(
+    candidate_msix: Path,
+    package_name: str,
+    *,
+    allow_running: bool,
+    force_update_from_any_version: bool = False,
+) -> str:
+    """Update the registered Store family, optionally rolling back a version."""
+
+    escaped_path = str(candidate_msix).replace("'", "''")
+    escaped_name = package_name.replace("'", "''")
+    lines = [
+        "$ErrorActionPreference = 'Stop'",
+        f"$packages = @(Get-AppxPackage -Name '{escaped_name}')",
+        "if ($packages.Count -ne 1) { "
+        "throw 'Expected exactly one Windows Store package registration' }",
+        "$package = $packages[0]",
+    ]
+    if not allow_running:
+        lines.extend(
+            [
+                "$prefix = [System.IO.Path]::GetFullPath($package.InstallLocation).TrimEnd('\\') + '\\'",
+                "Get-CimInstance Win32_Process | ForEach-Object {",
+                "  if ($_.ExecutablePath -and $_.ExecutablePath.StartsWith("
+                "$prefix, [System.StringComparison]::OrdinalIgnoreCase)) {",
+                "    Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop",
+                "  }",
+                "}",
+            ]
+        )
+    command = f"Add-AppxPackage -Path '{escaped_path}' -ForceApplicationShutdown"
+    if force_update_from_any_version:
+        command += " -ForceUpdateFromAnyVersion"
+    lines.append(command)
+    return "\n".join(lines)
+
+
+def _windows_inplace_metadata(
+    package: WindowsStorePackage,
+    identity: WindowsPackageIdentity,
+    *,
+    source_version: str,
+) -> dict[str, Any]:
+    return {
+        "kind": "windows-store-inplace-active",
+        "deployment_mode": "inplace",
+        "package_name": identity.name,
+        "package_publisher": identity.publisher,
+        "package_version": identity.version,
+        "store_package_full_name": package.package_full_name,
+        "store_package_family_name": package.package_family_name,
+        "source_version": source_version,
+    }
+
+
+def _windows_is_inplace_active(metadata: dict[str, Any]) -> bool:
+    return metadata.get("deployment_mode") == "inplace"
+
+
+def _verify_windows_store_replacement(
+    payload: dict[str, Any],
+    *,
+    identity: WindowsPackageIdentity,
+    package_family_name: str,
+    require_patch_marker: bool | None,
+) -> dict[str, Any]:
+    if not payload:
+        raise PatchError("The replacement Windows package is not registered")
+    expected = {
+        "Name": identity.name,
+        "PackageFamilyName": package_family_name,
+        "Publisher": identity.publisher,
+        "Version": identity.version,
+    }
+    for field, value in expected.items():
+        if payload.get(field) != value:
+            raise PatchError(f"Replacement Windows package has the wrong {field}")
+    install_location = payload.get("InstallLocation")
+    if not isinstance(install_location, str) or not install_location.strip():
+        raise PatchError("Replacement Windows package omitted InstallLocation")
+    try:
+        marker_present = contains_marker(
+            windows_package_asar_path(
+                Path(install_location), package_label="Replacement Windows package"
+            )
+        )
+    except OSError as exc:
+        raise PatchError("Could not inspect the replacement Windows ASAR") from exc
+    if require_patch_marker is not None and marker_present != require_patch_marker:
+        description = "missing the patch marker" if require_patch_marker else "is patched"
+        raise PatchError(f"Replacement Windows package {description}")
+    return payload
+
+
+def _windows_identity_from_inplace_metadata(
+    metadata: dict[str, Any]
+) -> WindowsPackageIdentity:
+    name = metadata.get("package_name")
+    publisher = metadata.get("package_publisher")
+    version = metadata.get("package_version")
+    if not all(isinstance(value, str) and value.strip() for value in (name, publisher, version)):
+        raise PatchError("Windows active replacement metadata is incomplete")
+    return WindowsPackageIdentity(name.strip(), publisher.strip(), version.strip())
+
+
+def _query_windows_store_replacement(
+    command_runner: Any,
+    identity: WindowsPackageIdentity,
+    package_family_name: str,
+    *,
+    require_patch_marker: bool | None,
+) -> dict[str, Any]:
+    payload = _query_windows_custom_package(
+        command_runner,
+        identity.name,
+        expected_family_name=package_family_name,
+        expected_publisher=identity.publisher,
+        expected_version=identity.version,
+        require_patch_marker=require_patch_marker is True,
+    )
+    return _verify_windows_store_replacement(
+        payload,
+        identity=identity,
+        package_family_name=package_family_name,
+        require_patch_marker=require_patch_marker,
+    )
+
+
+def _restore_windows_store_replacement(
+    recovery_msix: Path,
+    identity: WindowsPackageIdentity,
+    package_family_name: str,
+    command_runner: Any,
+    *,
+    require_patch_marker: bool,
+) -> None:
+    _run_windows_package_command(
+        command_runner,
+        _windows_powershell_command(
+            _windows_inplace_update_script(
+                recovery_msix,
+                identity.name,
+                allow_running=True,
+                force_update_from_any_version=True,
+            )
+        ),
+    )
+    _query_windows_store_replacement(
+        command_runner,
+        identity,
+        package_family_name,
+        require_patch_marker=require_patch_marker,
+    )
+
+
+def _remove_legacy_windows_sidecar(
+    metadata: dict[str, Any], command_runner: Any
+) -> None:
+    """Remove the known old sidecar only after an in-place patch succeeds."""
+
+    custom_name = metadata.get("custom_package_name")
+    custom_full_name = metadata.get("custom_package_full_name")
+    if not (
+        isinstance(custom_name, str)
+        and custom_name.endswith(".CodexPatch")
+        and isinstance(custom_full_name, str)
+        and custom_full_name.startswith(f"{custom_name}_")
+    ):
+        return
+    try:
+        _run_windows_package_command(
+            command_runner,
+            _windows_powershell_command(
+                _windows_remove_script(custom_name, custom_full_name)
+            ),
+        )
+    except PatchError as exc:
+        terminal_status(
+            "NOTICE",
+            "The legacy side-by-side Windows patch was left installed.",
+            "33",
+            detail=str(exc),
+        )
+
+
+def deploy_windows_store_replacement(
+    candidate_msix: Path,
+    recovery_msix: Path,
+    package: WindowsStorePackage,
+    paths: WindowsPatchPaths,
+    command_runner: Any,
+    *,
+    identity: WindowsPackageIdentity,
+    recovery_identity: WindowsPackageIdentity,
+    allow_running: bool = False,
+) -> Path:
+    """Replace the registered Store package while retaining a clean rollback."""
+
+    if paths.previous.exists():
+        raise PatchError(
+            "A previous Windows package snapshot requires recovery or removal: "
+            f"{paths.previous.resolve()}"
+        )
+    candidate_msix = Path(candidate_msix)
+    recovery_msix = Path(recovery_msix)
+    if not candidate_msix.is_file() or not recovery_msix.is_file():
+        raise PatchError("Windows replacement and recovery MSIX packages are required")
+
+    prior_metadata = _windows_metadata(paths.active) if paths.active.exists() else {}
+    had_active_artifact = paths.active.exists()
+    restore_identity = recovery_identity
+    restore_marker = False
+    if _windows_is_inplace_active(prior_metadata):
+        restore_identity = _windows_identity_from_inplace_metadata(prior_metadata)
+        restore_marker = True
+
+    snapshot_created = False
+    staged_candidate = candidate_msix
+    deployment_started = False
+    candidate_registered = False
+    try:
+        if had_active_artifact:
+            snapshot_windows_active(paths)
+            snapshot_created = True
+
+        # Add-AppxPackage can retain an open handle on its source MSIX. Promote
+        # a verified copy first so the package it uses is the durable active
+        # artifact, not the temporary build directory.
+        promote_windows_active(
+            candidate_msix,
+            paths,
+            metadata=_windows_inplace_metadata(
+                package, identity, source_version=recovery_identity.version
+            ),
+        )
+        staged_candidate = _windows_active_msix(paths.active)
+        deployment_started = True
+        _run_windows_package_command(
+            command_runner,
+            _windows_powershell_command(
+                _windows_inplace_update_script(
+                    staged_candidate,
+                    identity.name,
+                    allow_running=allow_running,
+                )
+            ),
+        )
+        _query_windows_store_replacement(
+            command_runner,
+            identity,
+            package.package_family_name,
+            require_patch_marker=None,
+        )
+        candidate_registered = True
+        installed = _query_windows_store_replacement(
+            command_runner,
+            identity,
+            package.package_family_name,
+            require_patch_marker=True,
+        )
+        metadata = _windows_metadata(paths.active)
+        metadata.update(
+            _windows_inplace_metadata(
+                package, identity, source_version=recovery_identity.version
+            )
+        )
+        metadata.update(
+            {
+                "package_full_name": installed["PackageFullName"],
+                "package_family_name": installed["PackageFamilyName"],
+            }
+        )
+        atomic_write_json(paths.active / "package.json", metadata)
+        if snapshot_created:
+            _remove_windows_path(paths.previous)
+        if not _windows_is_inplace_active(prior_metadata):
+            _remove_legacy_windows_sidecar(prior_metadata, command_runner)
+        return paths.active
+    except Exception as exc:
+        failures: list[str] = []
+        if deployment_started and not candidate_registered:
+            try:
+                _query_windows_store_replacement(
+                    command_runner,
+                    identity,
+                    package.package_family_name,
+                    require_patch_marker=None,
+                )
+                candidate_registered = True
+            except Exception:
+                # A failed Add-AppxPackage has no trustworthy proof that it
+                # changed the Store registration. Do not overwrite a known
+                # clean Store package merely to guess at recovery.
+                pass
+        if candidate_registered:
+            try:
+                recovery_source = (
+                    _windows_active_msix(paths.previous)
+                    if snapshot_created and restore_marker
+                    else recovery_msix
+                )
+                _restore_windows_store_replacement(
+                    recovery_source,
+                    restore_identity,
+                    package.package_family_name,
+                    command_runner,
+                    require_patch_marker=restore_marker,
+                )
+            except Exception as recovery_exc:
+                failures.append(f"restore registered Store package: {recovery_exc}")
+        if snapshot_created:
+            try:
+                restore_windows_previous(paths)
+                _remove_windows_path(paths.previous)
+            except Exception as state_exc:
+                failures.append(f"restore active artifact: {state_exc}")
+        elif paths.active.exists():
+            try:
+                _remove_windows_path(paths.active)
+            except Exception as state_exc:
+                failures.append(f"remove failed active artifact: {state_exc}")
+        if failures:
+            raise PatchError(
+                f"{exc}\nWindows replacement recovery failed: {'; '.join(failures)}\n"
+                f"Recovery evidence remains at: {paths.previous.resolve()}"
+            ) from exc
+        raise
+
+
 def _windows_sdk_search_roots() -> tuple[Path, ...]:
     roots: list[Path] = []
     for variable in ("PROGRAMFILES(X86)", "PROGRAMFILES", "ProgramFiles(x86)", "ProgramFiles"):
@@ -2827,22 +3323,61 @@ def patch_windows_store_app(
         )
     tools = find_windows_sdk_tools(_windows_sdk_search_roots())
     find_windows_node_tools()
-    certificate = windows_signing_certificate(command_runner)
-    ensure_windows_original(package, paths, command_runner=command_runner)
+    source = ensure_windows_store_source(
+        package, paths, command_runner=command_runner
+    )
+    source_identity = _windows_original_identity(paths, package)
+    certificate = windows_signing_certificate(
+        command_runner, subject=source_identity.publisher
+    )
+    if certificate.subject != source_identity.publisher:
+        raise PatchError(
+            "Windows signing certificate subject does not match the Store publisher"
+        )
+    replacement_identity = windows_store_replacement_identity(
+        source / "AppxManifest.xml",
+        package.name,
+        next_windows_package_version(package.version),
+    )
+    recovery_identity = WindowsPackageIdentity(
+        source_identity.name, source_identity.publisher, source_identity.version
+    )
     paths.root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="windows-package-", dir=paths.root) as temporary:
-        candidate = build_windows_patched_msix(
+        work = Path(temporary)
+        candidate = build_windows_store_replacement_msix(
             package,
-            paths.original,
-            Path(temporary),
+            source,
+            work,
             tools,
             certificate,
             command_runner,
+            replacement_identity,
         )
-        deploy_windows_msix(
+        recovery = build_windows_store_recovery_msix(
+            package,
+            source,
+            work / "recovery",
+            tools,
+            certificate,
+            command_runner,
+            recovery_identity,
+        )
+        durable_recovery = paths.original / "ChatGPT-StoreRecovery.msix"
+        try:
+            shutil.copyfile(recovery, durable_recovery)
+        except OSError as exc:
+            raise PatchError("Could not stage the Windows Store recovery package") from exc
+        if _windows_sha256(recovery) != _windows_sha256(durable_recovery):
+            raise PatchError("Windows Store recovery package digest verification failed")
+        deploy_windows_store_replacement(
             candidate,
+            durable_recovery,
+            package,
             paths,
             command_runner,
+            identity=replacement_identity,
+            recovery_identity=recovery_identity,
             allow_running=allow_running,
         )
     # Config is deliberately the final operation: a failed Windows preflight

@@ -1225,14 +1225,23 @@ class WindowsRollbackTests(unittest.TestCase):
             root = Path(temporary)
             config = root / "desktop-model-providers.json"
             package = self._store_package(root)
+            paths = patcher.windows_patch_paths(root)
+            paths.original.mkdir(parents=True)
+            (paths.original / "AppxManifest.xml").write_text(
+                '<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">'
+                '<Identity Name="OpenAI.ChatGPT" Publisher="CN=Store" Version="1.2.3.4" />'
+                "</Package>",
+                encoding="utf-8",
+            )
             tools = patcher.WindowsToolPaths(
                 root / "MakeAppx.exe", root / "SignTool.exe"
             )
-            certificate = patcher.WindowsSigningCertificate("CN=Patch", "ABC")
+            certificate = patcher.WindowsSigningCertificate("CN=Store", "ABC")
             events = []
 
-            def build(_package, _original, work, _tools, _certificate, _runner):
+            def build(_package, _original, work, _tools, _certificate, _runner, _identity):
                 candidate = work / "candidate.msix"
+                candidate.parent.mkdir(parents=True, exist_ok=True)
                 candidate.write_bytes(b"candidate")
                 events.append("build")
                 return candidate
@@ -1252,13 +1261,25 @@ class WindowsRollbackTests(unittest.TestCase):
                     "windows_signing_certificate",
                     return_value=certificate,
                 ),
-                mock.patch.object(patcher, "ensure_windows_original"),
                 mock.patch.object(
-                    patcher, "build_windows_patched_msix", side_effect=build
+                    patcher, "ensure_windows_store_source", return_value=paths.original
                 ),
                 mock.patch.object(
                     patcher,
-                    "deploy_windows_msix",
+                    "_windows_original_identity",
+                    return_value=patcher.WindowsPackageIdentity(
+                        "OpenAI.ChatGPT", "CN=Store", "1.2.3.4"
+                    ),
+                ),
+                mock.patch.object(
+                    patcher, "build_windows_store_replacement_msix", side_effect=build
+                ),
+                mock.patch.object(
+                    patcher, "build_windows_store_recovery_msix", side_effect=build
+                ),
+                mock.patch.object(
+                    patcher,
+                    "deploy_windows_store_replacement",
                     side_effect=lambda *args, **kwargs: events.append("deploy"),
                 ),
                 mock.patch.object(
@@ -1275,7 +1296,7 @@ class WindowsRollbackTests(unittest.TestCase):
                     command_runner=lambda command: completed(command),
                 )
 
-            self.assertEqual(events, ["build", "deploy", "config"])
+            self.assertEqual(events, ["build", "build", "deploy", "config"])
 
     def test_default_windows_runner_captures_text_output(self):
         command = ["powershell.exe", "-NoProfile"]
@@ -1909,6 +1930,243 @@ class WindowsRollbackTests(unittest.TestCase):
                     self.assertFalse(paths.previous.exists())
 
 
+class WindowsInplaceReplacementTests(unittest.TestCase):
+    def _store_package(self, root, *, version="1.2.3.4"):
+        install = root / "store"
+        (install / "resources").mkdir(parents=True)
+        (install / "resources" / "app.asar").write_bytes(b"clean")
+        (install / "AppxManifest.xml").write_text(
+            '<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">'
+            f'<Identity Name="OpenAI.ChatGPT" Publisher="CN=Store" Version="{version}" />'
+            "</Package>",
+            encoding="utf-8",
+        )
+        return patcher.WindowsStorePackage(
+            "OpenAI.ChatGPT",
+            f"OpenAI.ChatGPT_{version}_x64__8wekyb3d8bbwe",
+            "OpenAI.ChatGPT_8wekyb3d8bbwe",
+            version,
+            "X64",
+            install,
+            install / "AppxManifest.xml",
+            install / "resources" / "app.asar",
+        )
+
+    def _installed_payload(self, root, *, version, marked=True):
+        install = root / f"installed-{version}"
+        (install / "resources").mkdir(parents=True)
+        (install / "resources" / "app.asar").write_bytes(
+            patcher.PATCH_MARKER if marked else b"clean"
+        )
+        return json.dumps(
+            {
+                "Name": "OpenAI.ChatGPT",
+                "PackageFullName": f"OpenAI.ChatGPT_{version}_x64__8wekyb3d8bbwe",
+                "PackageFamilyName": "OpenAI.ChatGPT_8wekyb3d8bbwe",
+                "Publisher": "CN=Store",
+                "Version": version,
+                "InstallLocation": str(install),
+            }
+        )
+
+    def test_replacement_identity_preserves_store_name_and_publisher(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            package = self._store_package(Path(temporary))
+            identity = patcher.windows_store_replacement_identity(
+                package.manifest_path,
+                package.name,
+                patcher.next_windows_package_version(package.version),
+            )
+
+        self.assertEqual(identity.name, "OpenAI.ChatGPT")
+        self.assertEqual(identity.publisher, "CN=Store")
+        self.assertEqual(identity.version, "1.2.3.5")
+
+    def test_store_subject_is_used_for_the_replacement_certificate(self):
+        commands = []
+        certificate = patcher.windows_signing_certificate(
+            lambda command: commands.append(command)
+            or completed(command, '{"Subject":"CN=Store","Thumbprint":"ABC"}'),
+            subject="CN=Store",
+        )
+
+        self.assertEqual(certificate.subject, "CN=Store")
+        self.assertIn("$subject = 'CN=Store'", commands[0][-1])
+
+    def test_patched_registration_reuses_the_verified_clean_original(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = self._store_package(root)
+            package.asar_path.write_bytes(patcher.PATCH_MARKER)
+            paths = patcher.windows_patch_paths(root)
+            paths.original.mkdir(parents=True)
+            (paths.original / "resources").mkdir()
+            (paths.original / "resources" / "app.asar").write_bytes(b"clean")
+            (paths.original / "AppxManifest.xml").write_text(
+                '<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">'
+                '<Identity Name="OpenAI.ChatGPT" Publisher="CN=Store" Version="1.2.3.4" />'
+                "</Package>",
+                encoding="utf-8",
+            )
+            (paths.original / "package.json").write_text(
+                json.dumps(
+                    {
+                        "name": package.name,
+                        "package_family_name": package.package_family_name,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            source = patcher.ensure_windows_store_source(package, paths)
+
+        self.assertEqual(source, paths.original)
+
+    def test_failed_add_without_candidate_registration_does_not_install_recovery(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = self._store_package(root)
+            paths = patcher.windows_patch_paths(root)
+            candidate = root / "candidate.msix"
+            recovery = root / "recovery.msix"
+            candidate.write_bytes(b"candidate")
+            recovery.write_bytes(b"recovery")
+            identity = patcher.WindowsPackageIdentity(
+                "OpenAI.ChatGPT", "CN=Store", "1.2.3.5"
+            )
+            recovery_identity = patcher.WindowsPackageIdentity(
+                "OpenAI.ChatGPT", "CN=Store", "1.2.3.4"
+            )
+            calls = []
+
+            def runner(command):
+                calls.append(command[-1])
+                if "Add-AppxPackage" in command[-1]:
+                    raise patcher.PatchError("Add failed before registration")
+                return completed(command)
+
+            with self.assertRaisesRegex(patcher.PatchError, "Add failed"):
+                patcher.deploy_windows_store_replacement(
+                    candidate,
+                    recovery,
+                    package,
+                    paths,
+                    command_runner=runner,
+                    identity=identity,
+                    recovery_identity=recovery_identity,
+                )
+
+            self.assertEqual(
+                sum("Add-AppxPackage" in call for call in calls), 1
+            )
+            self.assertFalse(paths.active.exists())
+
+    def test_replacement_updates_the_store_family_and_promotes_active(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = self._store_package(root)
+            paths = patcher.windows_patch_paths(root)
+            candidate = root / "candidate.msix"
+            recovery = root / "recovery.msix"
+            candidate.write_bytes(b"candidate")
+            recovery.write_bytes(b"recovery")
+            identity = patcher.WindowsPackageIdentity(
+                "OpenAI.ChatGPT", "CN=Store", "1.2.3.5"
+            )
+            recovery_identity = patcher.WindowsPackageIdentity(
+                "OpenAI.ChatGPT", "CN=Store", "1.2.3.4"
+            )
+            payload = self._installed_payload(root, version="1.2.3.5")
+            calls = []
+
+            patcher.deploy_windows_store_replacement(
+                candidate,
+                recovery,
+                package,
+                paths,
+                command_runner=lambda command: calls.append(command)
+                or completed(
+                    command,
+                    payload if "ConvertTo-Json" in command[-1] else "",
+                ),
+                identity=identity,
+                recovery_identity=recovery_identity,
+            )
+
+            metadata = json.loads((paths.active / "package.json").read_text())
+            self.assertEqual(metadata["deployment_mode"], "inplace")
+            self.assertEqual(metadata["package_name"], "OpenAI.ChatGPT")
+            self.assertEqual(metadata["package_family_name"], package.package_family_name)
+            update_script = next(
+                command[-1] for command in calls if "Add-AppxPackage" in command[-1]
+            )
+            self.assertIn("Get-AppxPackage -Name 'OpenAI.ChatGPT'", update_script)
+            self.assertNotIn("CodexPatch", update_script)
+
+    def test_failed_inplace_verification_restores_previous_inplace_package(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = self._store_package(root)
+            paths = patcher.windows_patch_paths(root)
+            paths.active.mkdir(parents=True)
+            (paths.active / "previous.msix").write_bytes(b"previous")
+            previous_identity = patcher.WindowsPackageIdentity(
+                "OpenAI.ChatGPT", "CN=Store", "1.2.3.4"
+            )
+            atomic_metadata = patcher._windows_inplace_metadata(
+                package, previous_identity, source_version="1.2.3.3"
+            )
+            atomic_metadata.update(
+                {
+                    "package_full_name": "OpenAI.ChatGPT_1.2.3.4_x64__8wekyb3d8bbwe",
+                    "package_family_name": package.package_family_name,
+                }
+            )
+            (paths.active / "package.json").write_text(
+                json.dumps(atomic_metadata), encoding="utf-8"
+            )
+            candidate = root / "candidate.msix"
+            recovery = root / "recovery.msix"
+            candidate.write_bytes(b"candidate")
+            recovery.write_bytes(b"recovery")
+            candidate_identity = patcher.WindowsPackageIdentity(
+                "OpenAI.ChatGPT", "CN=Store", "1.2.3.5"
+            )
+            candidate_payload = self._installed_payload(root, version="1.2.3.5")
+            previous_payload = self._installed_payload(root, version="1.2.3.4")
+            calls = []
+            query_count = 0
+
+            def runner(command):
+                nonlocal query_count
+                script = command[-1]
+                calls.append(script)
+                if "ConvertTo-Json" not in script:
+                    return completed(command)
+                query_count += 1
+                if query_count == 2:
+                    raise patcher.PatchError("patched verification failed")
+                return completed(
+                    command,
+                    candidate_payload if query_count == 1 else previous_payload,
+                )
+
+            with self.assertRaisesRegex(patcher.PatchError, "patched verification failed"):
+                patcher.deploy_windows_store_replacement(
+                    candidate,
+                    recovery,
+                    package,
+                    paths,
+                    command_runner=runner,
+                    identity=candidate_identity,
+                    recovery_identity=previous_identity,
+                )
+
+            self.assertEqual((paths.active / "previous.msix").read_bytes(), b"previous")
+            self.assertFalse(paths.previous.exists())
+            self.assertTrue(any("-ForceUpdateFromAnyVersion" in call for call in calls))
+
+
 class PlatformDispatchTests(unittest.TestCase):
     def test_win32_dispatches_to_store_adapter_not_macos_bundle(self):
         args = types.SimpleNamespace(
@@ -1999,4 +2257,5 @@ class DocumentationTests(unittest.TestCase):
         self.assertIn("Node.js", readme)
         self.assertIn("Developer Mode is not required", readme)
         self.assertIn("run the patcher again", readme)
-        self.assertIn("official Store app is not modified", readme)
+        self.assertIn("same package\nfamily", readme)
+        self.assertIn("locally\nsigned in-place replacement", readme)
