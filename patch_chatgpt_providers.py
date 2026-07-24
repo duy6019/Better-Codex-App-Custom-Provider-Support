@@ -14,7 +14,10 @@ import json
 import os
 from pathlib import Path
 import plistlib
-import pwd
+try:
+    import pwd
+except ModuleNotFoundError:
+    pwd = None
 import re
 import shlex
 import shutil
@@ -758,7 +761,7 @@ class FancyArgumentParser(argparse.ArgumentParser):
 
 def invoking_user_home() -> Path:
     sudo_user = os.environ.get("SUDO_USER")
-    if sudo_user and sudo_user != "root":
+    if sudo_user and sudo_user != "root" and pwd is not None:
         try:
             return Path(pwd.getpwnam(sudo_user).pw_dir)
         except KeyError:
