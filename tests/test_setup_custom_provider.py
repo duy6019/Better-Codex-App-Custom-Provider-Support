@@ -19,6 +19,17 @@ class ProviderValidationTests(unittest.TestCase):
                 with self.assertRaisesRegex(setup.SetupError, "Provider ID"):
                     setup.validate_provider_id(value)
 
+    def test_windows_default_auth_method_is_credential_manager(self):
+        self.assertEqual(
+            setup.default_auth_method(platform_name="win32"), "credential-manager"
+        )
+
+    def test_rejects_platform_incompatible_secure_store(self):
+        with self.assertRaisesRegex(setup.SetupError, "Windows Credential Manager"):
+            setup.validate_auth_method("keychain", platform_name="win32")
+        with self.assertRaisesRegex(setup.SetupError, "macOS Keychain"):
+            setup.validate_auth_method("credential-manager", platform_name="darwin")
+
 
 class ProviderConfigurationTests(unittest.TestCase):
     def test_keychain_auth_toml_contains_lookup_command_but_not_key(self):
@@ -27,13 +38,25 @@ class ProviderConfigurationTests(unittest.TestCase):
         )
 
         updated = setup.update_provider_toml(
-            '[model_providers.other]\nname = "Other"\n', provider
+            '[model_providers.other]\nname = "Other"\n', provider, platform_name="darwin"
         )
 
         self.assertIn('[model_providers.acme]\nname = "Acme"', updated)
         self.assertIn('[model_providers.acme.auth]\ncommand = "security"', updated)
         self.assertIn('"codex-acme"', updated)
         self.assertIn('[model_providers.other]\nname = "Other"', updated)
+        self.assertNotIn("test-key", updated)
+
+    def test_windows_credential_manager_auth_toml_uses_powershell_lookup(self):
+        provider = setup.ProviderSetup(
+            "acme", "Acme", "https://api.acme.example/v1", "responses", "credential-manager"
+        )
+
+        updated = setup.update_provider_toml("", provider, platform_name="win32")
+
+        self.assertIn('[model_providers.acme.auth]\ncommand = "powershell.exe"', updated)
+        self.assertIn("CredRead", updated)
+        self.assertIn("codex-acme", updated)
         self.assertNotIn("test-key", updated)
 
     def test_no_auth_removes_existing_auth_table(self):
@@ -72,6 +95,19 @@ args = ["find-generic-password"]
                 "test-key",
             ],
         )
+
+    def test_store_windows_api_key_calls_powershell_credential_write(self):
+        runner = mock.Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+
+        setup.store_api_key(
+            "acme", "test-key", "credential-manager",
+            command_runner=runner, platform_name="win32",
+        )
+
+        command = runner.call_args.args[0]
+        self.assertEqual(command[:4], ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command"])
+        self.assertIn("CredWrite", command[4])
+        self.assertEqual(command[5:], ["codex-acme", "acme", "test-key"])
 
     def test_setup_provider_does_not_store_key_for_no_auth(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -116,7 +152,9 @@ class InteractiveSetupTests(unittest.TestCase):
         answers = iter(["acme", "Acme", "https://api.acme.example/v1", "", ""])
 
         provider, api_key = setup.prompt_provider_setup(
-            input_func=lambda _: next(answers), getpass_func=lambda _: "test-key"
+            input_func=lambda _: next(answers),
+            getpass_func=lambda _: "test-key",
+            platform_name="darwin",
         )
 
         self.assertEqual(
@@ -129,6 +167,18 @@ class InteractiveSetupTests(unittest.TestCase):
                 "keychain",
             ),
         )
+        self.assertEqual(api_key, "test-key")
+
+    def test_prompt_uses_credential_manager_default_on_windows(self):
+        answers = iter(["acme", "Acme", "https://api.acme.example/v1", "", ""])
+
+        provider, api_key = setup.prompt_provider_setup(
+            input_func=lambda _: next(answers),
+            getpass_func=lambda _: "test-key",
+            platform_name="win32",
+        )
+
+        self.assertEqual(provider.auth_method, "credential-manager")
         self.assertEqual(api_key, "test-key")
 
     def test_prompt_allows_no_auth_without_requesting_key(self):
@@ -173,6 +223,7 @@ class InteractiveSetupTests(unittest.TestCase):
                 routing_path,
                 api_key="test-key",
                 command_runner=runner,
+                platform_name="darwin",
             )
 
             self.assertIn(

@@ -30,7 +30,7 @@ from sync_codex_models import (
 RESERVED_PROVIDER_IDS = {"openai", "ollama", "lmstudio", "9router"}
 PROVIDER_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_-]*$")
 WIRE_APIS = {"responses", "chat"}
-AUTH_METHODS = {"keychain", "none"}
+AUTH_METHODS = {"keychain", "credential-manager", "none"}
 
 
 class SetupError(SyncError):
@@ -65,10 +65,28 @@ def validate_wire_api(value: str) -> str:
     return wire_api
 
 
-def validate_auth_method(value: str) -> str:
+def default_auth_method(*, platform_name: Optional[str] = None) -> str:
+    platform_name = platform_name or sys.platform
+    if platform_name == "darwin":
+        return "keychain"
+    if platform_name == "win32":
+        return "credential-manager"
+    raise SetupError("Secure credential storage is supported only on macOS and Windows")
+
+
+def validate_auth_method(value: str, *, platform_name: Optional[str] = None) -> str:
     auth_method = value.strip().lower()
     if auth_method not in AUTH_METHODS:
-        raise SetupError("Authentication must be 'keychain' or 'none'")
+        raise SetupError("Authentication must be 'keychain', 'credential-manager', or 'none'")
+    current_platform = platform_name or sys.platform
+    if auth_method == "keychain" and current_platform != "darwin":
+        if current_platform == "win32":
+            raise SetupError("Use Windows Credential Manager authentication on Windows")
+        raise SetupError("macOS Keychain authentication is available only on macOS")
+    if auth_method == "credential-manager" and current_platform != "win32":
+        if current_platform == "darwin":
+            raise SetupError("Use macOS Keychain authentication on macOS")
+        raise SetupError("Windows Credential Manager authentication is available only on Windows")
     return auth_method
 
 
@@ -98,9 +116,74 @@ def remove_toml_table(contents: str, table: str) -> str:
     return contents[: match.start()] + contents[end:]
 
 
-def update_provider_toml(contents: str, provider: ProviderSetup) -> str:
+def windows_credential_lookup_script() -> str:
+    return r'''$source = @'
+using System;
+using System.Runtime.InteropServices;
+public static class CredentialManager {
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+  public struct CREDENTIAL {
+    public UInt32 Flags; public UInt32 Type; public IntPtr TargetName;
+    public IntPtr Comment; public System.Runtime.InteropServices.ComTypes.FILETIME LastWritten;
+    public UInt32 CredentialBlobSize; public IntPtr CredentialBlob; public UInt32 Persist;
+    public UInt32 AttributeCount; public IntPtr Attributes; public IntPtr TargetAlias; public IntPtr UserName;
+  }
+  [DllImport("Advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  public static extern bool CredReadW(string target, UInt32 type, UInt32 flags, out IntPtr credential);
+  [DllImport("Advapi32.dll", SetLastError = true)]
+  public static extern void CredFree(IntPtr credential);
+}
+'@
+Add-Type -TypeDefinition $source
+$credential = [IntPtr]::Zero
+try {
+  if (-not [CredentialManager]::CredReadW($args[0], 1, 0, [ref]$credential)) { throw "Could not read Windows Credential Manager entry '$($args[0])'" }
+  $entry = [Runtime.InteropServices.Marshal]::PtrToStructure($credential, [type][CredentialManager+CREDENTIAL])
+  [Console]::Out.Write([Runtime.InteropServices.Marshal]::PtrToStringUni($entry.CredentialBlob, [int]($entry.CredentialBlobSize / 2)))
+} finally {
+  if ($credential -ne [IntPtr]::Zero) { [CredentialManager]::CredFree($credential) }
+}'''
+
+
+def windows_credential_write_script() -> str:
+    return r'''$source = @'
+using System;
+using System.Runtime.InteropServices;
+public static class CredentialManager {
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+  public struct CREDENTIAL {
+    public UInt32 Flags; public UInt32 Type; public IntPtr TargetName;
+    public IntPtr Comment; public System.Runtime.InteropServices.ComTypes.FILETIME LastWritten;
+    public UInt32 CredentialBlobSize; public IntPtr CredentialBlob; public UInt32 Persist;
+    public UInt32 AttributeCount; public IntPtr Attributes; public IntPtr TargetAlias; public IntPtr UserName;
+  }
+  [DllImport("Advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  public static extern bool CredWriteW(ref CREDENTIAL credential, UInt32 flags);
+}
+'@
+Add-Type -TypeDefinition $source
+$target = [Runtime.InteropServices.Marshal]::StringToCoTaskMemUni($args[0])
+$username = [Runtime.InteropServices.Marshal]::StringToCoTaskMemUni($args[1])
+$bytes = [Text.Encoding]::Unicode.GetBytes($args[2])
+$blob = [Runtime.InteropServices.Marshal]::AllocCoTaskMem($bytes.Length)
+try {
+  [Runtime.InteropServices.Marshal]::Copy($bytes, 0, $blob, $bytes.Length)
+  $entry = New-Object CredentialManager+CREDENTIAL
+  $entry.Type = 1; $entry.TargetName = $target; $entry.UserName = $username
+  $entry.CredentialBlobSize = $bytes.Length; $entry.CredentialBlob = $blob; $entry.Persist = 2
+  if (-not [CredentialManager]::CredWriteW([ref]$entry, 0)) { throw "Could not write Windows Credential Manager entry '$($args[0])'" }
+} finally {
+  [Runtime.InteropServices.Marshal]::FreeCoTaskMem($target)
+  [Runtime.InteropServices.Marshal]::FreeCoTaskMem($username)
+  [Runtime.InteropServices.Marshal]::FreeCoTaskMem($blob)
+}'''
+
+
+def update_provider_toml(
+    contents: str, provider: ProviderSetup, *, platform_name: Optional[str] = None
+) -> str:
     provider_id = validate_provider_id(provider.provider_id)
-    auth_method = validate_auth_method(provider.auth_method)
+    auth_method = validate_auth_method(provider.auth_method, platform_name=platform_name)
     table = f"model_providers.{provider_id}"
     body = "\n".join(
         (
@@ -114,22 +197,24 @@ def update_provider_toml(contents: str, provider: ProviderSetup) -> str:
     if auth_method == "none":
         return remove_toml_table(updated, auth_table)
 
-    auth_body = "\n".join(
-        (
-            'command = "security"',
-            "args = "
-            + json.dumps(
-                [
-                    "find-generic-password",
-                    "-s",
-                    keychain_service(provider_id),
-                    "-a",
-                    provider_id,
-                    "-w",
-                ]
-            ),
+    if auth_method == "keychain":
+        auth_body = "\n".join(
+            (
+                'command = "security"',
+                "args = " + json.dumps(
+                    ["find-generic-password", "-s", keychain_service(provider_id), "-a", provider_id, "-w"]
+                ),
+            )
         )
-    )
+    else:
+        auth_body = "\n".join(
+            (
+                'command = "powershell.exe"',
+                "args = " + json.dumps(
+                    ["-NoProfile", "-NonInteractive", "-Command", windows_credential_lookup_script(), keychain_service(provider_id)]
+                ),
+            )
+        )
     return replace_toml_table(updated, auth_table, auth_body)
 
 
@@ -166,6 +251,33 @@ def store_keychain_api_key(
         ) from exc
 
 
+def store_api_key(
+    provider_id: str,
+    api_key: str,
+    auth_method: str,
+    *,
+    command_runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    platform_name: Optional[str] = None,
+) -> None:
+    auth_method = validate_auth_method(auth_method, platform_name=platform_name)
+    if not api_key:
+        raise SetupError("API key cannot be empty")
+    if auth_method == "keychain":
+        store_keychain_api_key(provider_id, api_key, command_runner=command_runner)
+        return
+    if auth_method == "credential-manager":
+        command = [
+            "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+            windows_credential_write_script(), keychain_service(provider_id), provider_id, api_key,
+        ]
+        try:
+            command_runner(command, check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+            raise SetupError(
+                f"Could not store Windows Credential Manager entry '{keychain_service(provider_id)}'"
+            ) from exc
+
+
 def setup_provider(
     provider: ProviderSetup,
     toml_path: Path,
@@ -173,6 +285,7 @@ def setup_provider(
     *,
     api_key: Optional[str] = None,
     command_runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    platform_name: Optional[str] = None,
 ) -> None:
     toml_path = user_level_config_path(toml_path)
     provider = ProviderSetup(
@@ -180,27 +293,28 @@ def setup_provider(
         provider.label.strip(),
         validate_base_url(provider.base_url),
         validate_wire_api(provider.wire_api),
-        validate_auth_method(provider.auth_method),
+        validate_auth_method(provider.auth_method, platform_name=platform_name),
     )
     if not provider.label:
         raise SetupError("Provider display name cannot be empty")
 
-    updated_toml = update_provider_toml(read_text(toml_path), provider)
+    updated_toml = update_provider_toml(read_text(toml_path), provider, platform_name=platform_name)
     routing = upsert_provider_menu_entry(
         read_provider_routing(routing_path), provider.provider_id, provider.label
     )
-    if provider.auth_method == "keychain":
-        store_keychain_api_key(
-            provider.provider_id, api_key or "", command_runner=command_runner
+    if provider.auth_method != "none":
+        store_api_key(
+            provider.provider_id, api_key or "", provider.auth_method,
+            command_runner=command_runner, platform_name=platform_name,
         )
 
     try:
         atomic_write_text(toml_path, updated_toml)
         atomic_write_json(routing_path, routing)
     except SyncError as exc:
-        if provider.auth_method == "keychain":
+        if provider.auth_method != "none":
             raise SetupError(
-                "Configuration update failed after storing Keychain entry "
+                "Configuration update failed after storing secure credential entry "
                 f"'{keychain_service(provider.provider_id)}'"
             ) from exc
         raise
@@ -210,6 +324,7 @@ def prompt_provider_setup(
     *,
     input_func: Callable[[str], str] = input,
     getpass_func: Callable[[str], str] = getpass.getpass,
+    platform_name: Optional[str] = None,
 ) -> tuple[ProviderSetup, Optional[str]]:
     provider_id = validate_provider_id(input_func("Provider ID: "))
     label = input_func("Display name: ").strip()
@@ -217,12 +332,16 @@ def prompt_provider_setup(
         raise SetupError("Provider display name cannot be empty")
     base_url = validate_base_url(input_func("Base URL: "))
     wire_api = validate_wire_api(input_func("Wire API [responses]: ") or "responses")
+    default_method = default_auth_method(platform_name=platform_name)
     auth_method = validate_auth_method(
-        input_func("Authentication [keychain/none] [keychain]: ") or "keychain"
+        input_func(
+            f"Authentication [keychain/credential-manager/none] [{default_method}]: "
+        ) or default_method,
+        platform_name=platform_name,
     )
     api_key = (
         getpass_func(f"API key for {keychain_service(provider_id)}: ")
-        if auth_method == "keychain"
+        if auth_method != "none"
         else None
     )
     return ProviderSetup(provider_id, label, base_url, wire_api, auth_method), api_key
