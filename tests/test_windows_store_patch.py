@@ -146,6 +146,20 @@ class WindowsStoreDiscoveryTests(unittest.TestCase):
         self.assertEqual(tools.makeappx, complete_root / "MakeAppx.exe")
         self.assertEqual(tools.signtool, complete_root / "SignTool.exe")
 
+    def test_sdk_preflight_prefers_the_host_tool_architecture(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for architecture in ("arm64", "x64"):
+                tool_root = root / "10.0.28000.0" / architecture
+                tool_root.mkdir(parents=True)
+                (tool_root / "MakeAppx.exe").write_bytes(b"")
+                (tool_root / "SignTool.exe").write_bytes(b"")
+
+            with mock.patch.object(patcher.platform, "machine", return_value="AMD64"):
+                tools = patcher.find_windows_sdk_tools(search_roots=(root,))
+
+        self.assertEqual(tools.makeappx.parent.name, "x64")
+
     def test_node_preflight_requires_node_and_npx_on_path(self):
         with mock.patch.object(patcher.shutil, "which", return_value=None):
             with self.assertRaisesRegex(patcher.PatchError, "Node.js tools"):
@@ -157,6 +171,18 @@ class WindowsStoreDiscoveryTests(unittest.TestCase):
 
         with mock.patch.object(patcher.sys, "platform", "darwin"):
             self.assertEqual(patcher.npx_executable(), "npx")
+
+    def test_windows_package_command_includes_tool_output_on_failure(self):
+        result = subprocess.CompletedProcess(
+            ["MakeAppx.exe"], 1, "makeappx output", "makeappx error"
+        )
+
+        with self.assertRaisesRegex(
+            patcher.PatchError, r"makeappx output[\s\S]*makeappx error"
+        ):
+            patcher._run_windows_package_command(
+                lambda command: result, ["MakeAppx.exe", "pack"]
+            )
 
 
 class WindowsPackageBuildTests(unittest.TestCase):
@@ -186,6 +212,26 @@ class WindowsPackageBuildTests(unittest.TestCase):
         self.assertIn('Name="OpenAI.ChatGPT.CodexPatch"', updated)
         self.assertIn('Publisher="CN=Codex Provider Patch"', updated)
         self.assertIn('<DisplayName>ChatGPT</DisplayName>', updated)
+
+    def test_manifest_rewrite_preserves_ignorable_namespace_prefixes(self):
+        source = (
+            '<Package xmlns="urn:foundation" xmlns:desktop6="urn:desktop6" '
+            'IgnorableNamespaces="desktop6">'
+            '<Identity Name="OpenAI.Codex" Publisher="CN=Store" Version="1.2.3.4" />'
+            '<desktop6:FileSystemWriteVirtualization>disabled'
+            '</desktop6:FileSystemWriteVirtualization></Package>'
+        )
+
+        updated = patcher.rewrite_windows_manifest_identity(
+            source,
+            patcher.WindowsPackageIdentity(
+                "OpenAI.Codex.CodexPatch", "CN=Codex Provider Patch", "1.2.3.4"
+            ),
+        )
+
+        self.assertIn('xmlns:desktop6="urn:desktop6"', updated)
+        self.assertIn('IgnorableNamespaces="desktop6"', updated)
+        self.assertIn('<desktop6:FileSystemWriteVirtualization>', updated)
 
     def test_certificate_setup_uses_only_public_certificate_material(self):
         commands = []

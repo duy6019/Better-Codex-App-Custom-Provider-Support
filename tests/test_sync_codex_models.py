@@ -424,6 +424,21 @@ class CurrentBundleTests(unittest.TestCase):
 
             self.assertEqual(patcher.current_patch_bundle(assets), expected)
 
+    def test_current_patch_bundle_finds_windows_store_3996_app_initial(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            assets = Path(temporary)
+            expected = self.write_bundle(
+                assets,
+                "app-initial-DVfVy4b5.js",
+                patcher.WINDOWS_STORE_3996_BUNDLE_MARKERS,
+            )
+
+            self.assertEqual(patcher.current_patch_bundle(assets), expected)
+            self.assertEqual(
+                patcher.bundle_patch_variant(expected).name,
+                "Windows Store ChatGPT 26.721.3996.0 application",
+            )
+
     def test_current_patch_bundle_rejects_missing_build_5828_layout(self):
         with tempfile.TemporaryDirectory() as temporary:
             assets = Path(temporary)
@@ -435,7 +450,7 @@ class CurrentBundleTests(unittest.TestCase):
 
             with self.assertRaisesRegex(
                 patcher.PatchError,
-                "ChatGPT 26.721.31836 build 5828 application.*found 0 out of 1 filename matches",
+                "supported ChatGPT application.*found 0 out of 1 filename matches",
             ):
                 patcher.current_patch_bundle(assets)
 
@@ -475,6 +490,45 @@ class CurrentBundleTests(unittest.TestCase):
         self.assertIn("function Qjs(e)", patcher.BUILD_5828_BUNDLE_MARKERS)
         self.assertIn("async function rp(...e)", patcher.BUILD_5828_BUNDLE_MARKERS)
 
+    def test_windows_store_3996_markers_include_verified_minified_symbols(self):
+        self.assertIn("function p9t(e,t)", patcher.WINDOWS_STORE_3996_BUNDLE_MARKERS)
+        self.assertIn("function Jss(e)", patcher.WINDOWS_STORE_3996_BUNDLE_MARKERS)
+        self.assertIn("function Yss(e)", patcher.WINDOWS_STORE_3996_BUNDLE_MARKERS)
+
+    def test_windows_store_3996_diffs_apply_every_hunk_once(self):
+        diffs = (
+            patcher.WINDOWS_STORE_3996_CENTRAL_DIFF,
+            patcher.WINDOWS_STORE_3996_PICKER_DIFF,
+        )
+        source_parts = []
+        for diff in diffs:
+            for number, hunk in enumerate(patcher.parse_hunks(diff), 1):
+                source_parts.extend(
+                    line[1:] for line in hunk if line[0] in " -"
+                )
+                source_parts.append(f"// hunk boundary {number}")
+        source_parts.append(patcher.PICKER_COMPONENT_3996_ANCHOR)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            bundle = Path(temporary) / "app-initial-DVfVy4b5.js"
+            bundle.write_text("\n".join(source_parts) + "\n", encoding="utf-8")
+
+            for diff in diffs:
+                patcher.apply_unified_diff(bundle, diff)
+            patcher.insert_unique_before(
+                bundle,
+                patcher.PICKER_COMPONENT_3996_ANCHOR,
+                patcher.PICKER_COMPONENT_3996,
+            )
+
+            patched = bundle.read_text(encoding="utf-8")
+
+        self.assertIn(patcher.PATCH_MARKER.decode(), patched)
+        self.assertIn("CodexCustomProviderPickerSection", patched)
+        self.assertIn("await If(`codex-home`", patched)
+        self.assertIn("(0, $X.jsx)(Jss", patched)
+        self.assertIn("(0, $X.jsx)(UR.Title", patched)
+
     def test_patch_current_bundle_applies_both_diffs_to_one_file(self):
         with tempfile.TemporaryDirectory() as temporary:
             bundle = Path(temporary) / "app-initial-current.js"
@@ -493,6 +547,11 @@ class CurrentBundleTests(unittest.TestCase):
 
             with (
                 mock.patch.object(patcher, "run") as run,
+                mock.patch.object(
+                    patcher,
+                    "bundle_patch_variant",
+                    return_value=patcher.BUNDLE_PATCH_VARIANTS[0],
+                ),
                 mock.patch.object(
                     patcher,
                     "apply_unified_diff",

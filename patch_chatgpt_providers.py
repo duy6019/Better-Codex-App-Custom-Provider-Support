@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import platform
 import plistlib
 try:
     import pwd
@@ -56,6 +57,16 @@ BUILD_5828_BUNDLE_MARKERS = (
     "function p9t(e)",
     "function Qjs(e)",
     "async function rp(...e)",
+)
+WINDOWS_STORE_3996_BUNDLE_MARKERS = (
+    "async prewarmThreadStart(",
+    "async sendConfigReadRequest(",
+    "composer.intelligenceDropdown.tooltip",
+    "data-model-picker-model-row",
+    "vertical-scroll-fade-mask flex max-h-[250px] flex-col overflow-y-auto",
+    "function p9t(e,t)",
+    "function Jss(e)",
+    "function Yss(e)",
 )
 
 DEFAULT_PROVIDER_CONFIG: dict[str, Any] = {
@@ -477,6 +488,176 @@ PICKER_DIFF = r"""@@ -520216,8 +520216,13 @@
 +      (CodexProviderPatchReact = r(o(), 1)),
        sd(),
 """
+
+
+def _reorder_embedded_diff_hunks(unified_diff: str, order: tuple[int, ...]) -> str:
+    blocks: list[list[str]] = []
+    current: list[str] | None = None
+    for line in unified_diff.splitlines():
+        if line.startswith("@@ "):
+            current = [line]
+            blocks.append(current)
+        elif current is not None:
+            current.append(line)
+    if len(blocks) != len(order):
+        raise RuntimeError("Embedded diff hunk order is stale")
+    return "\n".join("\n".join(blocks[index]) for index in order)
+
+
+WINDOWS_STORE_3996_CENTRAL_DIFF = _reorder_embedded_diff_hunks(CENTRAL_DIFF.replace(
+    """ function p9t(e) {
+   if (`data` in e) return e;
+   let t = fbe(e);
+   return t == null ? e : { ...e, data: t };
+ }""",
+    """ function p9t(e, t) {
+   return Dx(e) === 2 ? e.has(t) : Object.prototype.hasOwnProperty.call(e, t);
+ }""",
+).replace(" var m9t,", " function m9t(e, t) {").replace("await rp(", "await If("), (1, 2, 0))
+
+WINDOWS_STORE_3996_PICKER_DIFF = r"""@@ -519091,8 +519091,13 @@
+  t[43] === r.model
+    ? (ie = t[44])
+-    : ((ie = r.model == null ? null : (0, $X.jsx)(Jss, { submenu: r.model })),
++    : ((ie =
++        r.model == null
++          ? null
++          : (0, $X.jsx)(Jss, {
++              submenu: r.model,
++              providerPicker: !0,
++            })),
+      (t[43] = r.model),
+      (t[44] = ie));
+@@ -519204,10 +519209,17 @@
+      ? ((u = (0, $X.jsx)(vos, {
+          ariaLabel: r,
+          contentClassName: i,
+          disabled: a,
+          flyoutHeader: o,
+          label: s,
+          value: c,
+-          children: l,
++          children: e.providerPicker
++            ? (0, $X.jsxs)($X.Fragment, {
++                children: [
++                  (0, $X.jsx)(CodexCustomProviderPickerSection, {}),
++                  l,
++                ],
++              })
++            : l,
+        })),
+"""
+WINDOWS_STORE_3996_PICKER_DIFF = "\n".join(
+    f" {line}" if line.startswith(" ") else line
+    for line in WINDOWS_STORE_3996_PICKER_DIFF.splitlines()
+)
+
+PICKER_COMPONENT_3996_ANCHOR = """function Jss(e) {
+  let t = (0, Xss.c)(12),
+    { submenu: n } = e,"""
+
+PICKER_COMPONENT_3996 = r"""function codexPickerReadCustomProviderChoice(e) {
+  try {
+    let t = window.localStorage.getItem(`codex.customProviderSelection.v1`);
+    return e.providers.some((e) => e.id === t) ? t : e.defaultProvider;
+  } catch {
+    return e.defaultProvider;
+  }
+}
+function codexPickerWriteCustomProviderChoice(e) {
+  try {
+    window.localStorage.setItem(`codex.customProviderSelection.v1`, e);
+  } catch {}
+}
+function CodexCustomProviderPickerSection() {
+  let r = codexProviderRoutingState(),
+    [e, t] = QX.useState(r.config),
+    [n, i] = QX.useState(r.error),
+    [a, o] = QX.useState(() => codexPickerReadCustomProviderChoice(r.config));
+  QX.useEffect(() => {
+    let e = !0;
+    return (
+      codexLoadProviderRoutingConfig(!0).then((n) => {
+        if (e) {
+          let e = codexPickerReadCustomProviderChoice(n);
+          (t(n),
+            i(codexProviderRoutingState().error),
+            codexPickerWriteCustomProviderChoice(e),
+            o(e));
+        }
+      }),
+      () => {
+        e = !1;
+      }
+    );
+  }, []);
+  let s = (e) => (t) => {
+      (t?.preventDefault(), codexPickerWriteCustomProviderChoice(e), o(e));
+    },
+    c = e.providers.map((e) =>
+      (0, $X.jsx)(
+        UR.Item,
+        {
+          RightIcon: a === e.id ? Fm : void 0,
+          SubText:
+            e.description.length === 0
+              ? null
+              : (0, $X.jsx)(`span`, {
+                  className: `text-token-description-foreground`,
+                  children: e.description,
+                }),
+          onSelect: s(e.id),
+          children: e.label,
+        },
+        e.id,
+      ),
+    );
+  return (0, $X.jsxs)($X.Fragment, {
+    children: [
+      (0, $X.jsx)(UR.Title, { children: `Provider for new tasks` }),
+      n == null
+        ? null
+        : (0, $X.jsx)(UR.Item, {
+            disabled: !0,
+            SubText: (0, $X.jsx)(`span`, {
+              className: `text-token-description-foreground`,
+              children: n,
+            }),
+            children: `Provider config error — using fallback`,
+          }),
+      c,
+      (0, $X.jsx)(UR.Separator, {}),
+    ],
+  });
+}
+"""
+
+@dataclasses.dataclass(frozen=True)
+class BundlePatchVariant:
+    name: str
+    markers: tuple[str, ...]
+    central_diff: str
+    picker_diff: str
+    picker_insertion_anchor: str = ""
+    picker_insertion: str = ""
+
+
+BUNDLE_PATCH_VARIANTS = (
+    BundlePatchVariant(
+        "ChatGPT 26.721.31836 build 5828 application",
+        BUILD_5828_BUNDLE_MARKERS,
+        CENTRAL_DIFF,
+        PICKER_DIFF,
+    ),
+    BundlePatchVariant(
+        "Windows Store ChatGPT 26.721.3996.0 application",
+        WINDOWS_STORE_3996_BUNDLE_MARKERS,
+        WINDOWS_STORE_3996_CENTRAL_DIFF,
+        WINDOWS_STORE_3996_PICKER_DIFF,
+        PICKER_COMPONENT_3996_ANCHOR,
+        PICKER_COMPONENT_3996,
+    ),
+)
 
 
 class PatchError(RuntimeError):
@@ -929,10 +1110,29 @@ def discover_windows_store_package(command_runner: Any) -> WindowsStorePackage:
     )
 
 
+def windows_sdk_tool_architecture() -> str:
+    """Return the Windows SDK tool architecture that can run on this host."""
+
+    machine = platform.machine().casefold()
+    if machine in {"amd64", "x86_64", "x64"}:
+        return "x64"
+    if machine in {"arm64", "aarch64"}:
+        return "arm64"
+    return "x86"
+
+
 def find_windows_sdk_tools(search_roots: Sequence[Path]) -> WindowsToolPaths:
     missing_tool_error: PatchError | None = None
+    preferred_architecture = windows_sdk_tool_architecture()
     for root in search_roots:
-        for makeappx in sorted(root.rglob("MakeAppx.exe")):
+        candidates = sorted(
+            root.rglob("MakeAppx.exe"),
+            key=lambda candidate: (
+                candidate.parent.name.casefold() != preferred_architecture,
+                str(candidate).casefold(),
+            ),
+        )
+        for makeappx in candidates:
             if not makeappx.is_file():
                 continue
             signtool = makeappx.with_name("SignTool.exe")
@@ -1066,13 +1266,31 @@ def rewrite_windows_manifest_identity(
     )
     if identity_element is None:
         raise PatchError("Windows package manifest has no Identity element")
-    identity_element.set("Name", identity.name)
-    identity_element.set("Publisher", identity.publisher)
-    identity_element.set("Version", identity.version)
 
-    if root.tag.startswith("{"):
-        ET.register_namespace("", root.tag[1:].split("}", 1)[0])
-    return ET.tostring(root, encoding="unicode")
+    # ElementTree changes namespace prefixes when it serializes the manifest.
+    # Appx manifests reference their original prefixes from IgnorableNamespaces,
+    # so that otherwise-valid rewrite is rejected by MakeAppx.  Preserve the
+    # source document and edit only the three Identity attributes instead.
+    match = re.search(r"<(?:[A-Za-z_][\w.-]*:)?Identity\b[^>]*>", contents)
+    if match is None:
+        raise PatchError("Windows package manifest has no serializable Identity element")
+    tag = match.group(0)
+    for attribute, value in (
+        ("Name", identity.name),
+        ("Publisher", identity.publisher),
+        ("Version", identity.version),
+    ):
+        tag, replacements = re.subn(
+            rf"(\s{attribute}\s*=\s*)([\"']).*?\2",
+            lambda attribute_match: f'{attribute_match.group(1)}"{value}"',
+            tag,
+            count=1,
+        )
+        if replacements != 1:
+            raise PatchError(
+                f"Windows package manifest Identity is missing {attribute}"
+            )
+    return contents[:match.start()] + tag + contents[match.end():]
 
 
 def _run_windows_package_command(command_runner: Any, command: list[str]) -> None:
@@ -1083,7 +1301,18 @@ def _run_windows_package_command(command_runner: Any, command: list[str]) -> Non
     except Exception as exc:
         raise PatchError(f"Windows package command failed: {command[0]}") from exc
     if getattr(result, "returncode", 0) != 0:
-        raise PatchError(f"Windows package command failed: {command[0]}")
+        details = "\n".join(
+            output.strip()
+            for output in (
+                getattr(result, "stdout", "") or "",
+                getattr(result, "stderr", "") or "",
+            )
+            if output.strip()
+        )
+        message = f"Windows package command failed: {command[0]}"
+        if details:
+            message += f"\n{details}"
+        raise PatchError(message)
 
 
 def update_windows_asar_integrity(layout: Path, asar_path: Path) -> None:
@@ -2859,13 +3088,43 @@ def unique_candidate(
     return matches[0]
 
 
-def current_patch_bundle(assets: Path) -> Path:
-    return unique_candidate(
-        assets,
-        "app-initial-*.js",
-        BUILD_5828_BUNDLE_MARKERS,
-        "ChatGPT 26.721.31836 build 5828 application",
+def _matching_bundle_patch_variants(source: str) -> tuple[BundlePatchVariant, ...]:
+    return tuple(
+        variant
+        for variant in BUNDLE_PATCH_VARIANTS
+        if all(marker in source for marker in variant.markers)
     )
+
+
+def bundle_patch_variant(bundle: Path) -> BundlePatchVariant:
+    source = bundle.read_text(encoding="utf-8")
+    matches = _matching_bundle_patch_variants(source)
+    if len(matches) != 1:
+        raise PatchError(
+            f"Expected exactly one supported patch variant for {bundle.name}, "
+            f"found {len(matches)}"
+        )
+    return matches[0]
+
+
+def current_patch_bundle(assets: Path) -> Path:
+    filename_matches = sorted(
+        path
+        for path in assets.glob("app-initial-*.js")
+        if not path.name.endswith(".map.js")
+    )
+    matches = []
+    for path in filename_matches:
+        source = path.read_text(encoding="utf-8")
+        if len(_matching_bundle_patch_variants(source)) == 1:
+            matches.append(path)
+    if len(matches) != 1:
+        raise PatchError(
+            "Expected exactly one supported ChatGPT application JavaScript bundle "
+            "containing 'app-initial-*.js' and a complete source-marker set, "
+            f"found {len(matches)} out of {len(filename_matches)} filename matches"
+        )
+    return matches[0]
 
 
 def parse_hunks(unified_diff: str) -> list[list[str]]:
@@ -2912,13 +3171,31 @@ def apply_unified_diff(path: Path, unified_diff: str) -> None:
     path.write_text(result, encoding="utf-8")
 
 
+def insert_unique_before(path: Path, anchor: str, insertion: str) -> None:
+    source = path.read_text(encoding="utf-8")
+    matches = source.count(anchor)
+    if matches != 1:
+        raise PatchError(
+            f"{path.name}: insertion anchor matched {matches} times; "
+            "the app build is unsupported or already modified"
+        )
+    path.write_text(source.replace(anchor, insertion + anchor, 1), encoding="utf-8")
+
+
 def patch_current_bundle(bundle: Path) -> None:
+    variant = bundle_patch_variant(bundle)
     run(
         [npx_executable(), "--yes", PRETTIER_PACKAGE, "--write", str(bundle)],
         label="Preparing the JavaScript bundle",
     )
-    apply_unified_diff(bundle, CENTRAL_DIFF)
-    apply_unified_diff(bundle, PICKER_DIFF)
+    apply_unified_diff(bundle, variant.central_diff)
+    apply_unified_diff(bundle, variant.picker_diff)
+    if variant.picker_insertion_anchor:
+        insert_unique_before(
+            bundle,
+            variant.picker_insertion_anchor,
+            variant.picker_insertion,
+        )
 
     source = bundle.read_text(encoding="utf-8")
     if PATCH_MARKER.decode() not in source:
