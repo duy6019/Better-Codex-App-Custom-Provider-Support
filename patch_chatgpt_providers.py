@@ -335,37 +335,13 @@ PICKER_DIFF = r"""@@ -548655,6 +548655,204 @@
 +  };
 +}
 +function codexPickerProviderRoutingState() {
-+  let e = (window.__codexDesktopModelProvidersPatchV2 ??= {
++  return (window.__codexDesktopModelProvidersPatchV2 ??= {
 +    config: codexPickerProviderRoutingFallback(),
 +    configPath: null,
 +    error: null,
 +    loaded: !1,
 +    promise: null,
 +  });
-+  return (
-+    (e.listeners ??= new Set()),
-+    (e.revision ??= 0),
-+    (e.selectedProvider ??= codexReadCustomProviderChoice(e.config)),
-+    e
-+  );
-+}
-+function codexPickerPublishProviderRoutingState() {
-+  let e = codexPickerProviderRoutingState();
-+  e.revision += 1;
-+  for (let t of e.listeners) t(e.revision);
-+}
-+function codexPickerAcceptProviderRoutingConfig(e, t) {
-+  let n = codexPickerProviderRoutingState(),
-+    r = codexReadCustomProviderChoice(e);
-+  return (
-+    (n.config = e),
-+    (n.error = t),
-+    (n.loaded = !0),
-+    (n.selectedProvider = r),
-+    codexWriteCustomProviderChoice(r),
-+    codexPickerPublishProviderRoutingState(),
-+    e
-+  );
 +}
 +async function codexPickerLoadProviderRoutingConfig(e = !1) {
 +  let t = codexPickerProviderRoutingState();
@@ -384,11 +360,13 @@ PICKER_DIFF = r"""@@ -548655,6 +548655,204 @@
 +            params: { hostId: `local`, path: r },
 +          }),
 +          a = codexPickerNormalizeProviderRoutingConfig(JSON.parse(i));
-+        return codexPickerAcceptProviderRoutingConfig(a, null);
++        return ((t.config = a), (t.error = null), (t.loaded = !0), a);
 +      } catch (e) {
-+        return codexPickerAcceptProviderRoutingConfig(
-+          codexPickerProviderRoutingFallback(),
-+          e instanceof Error ? e.message : String(e),
++        return (
++          (t.config = codexPickerProviderRoutingFallback()),
++          (t.error = e instanceof Error ? e.message : String(e)),
++          (t.loaded = !0),
++          t.config
 +        );
 +      } finally {
 +        t.promise = null;
@@ -410,59 +388,6 @@ PICKER_DIFF = r"""@@ -548655,6 +548655,204 @@
 +    window.localStorage.setItem(`codex.customProviderSelection.v1`, e);
 +  } catch {}
 +}
-+function codexPickerSetCustomProviderChoice(e) {
-+  let t = codexPickerProviderRoutingState(),
-+    n = t.config.providers.some((t) => t.id === e) ? e : t.config.defaultProvider;
-+  return (
-+    (t.selectedProvider = n),
-+    codexWriteCustomProviderChoice(n),
-+    codexPickerPublishProviderRoutingState(),
-+    n
-+  );
-+}
-+function codexProviderForModel(e, t) {
-+  return t.modelProviders[e] ?? t.defaultProvider;
-+}
-+function codexFilterModelsForProvider(e, t, n) {
-+  return e == null
-+    ? e
-+    : e.filter((e) => codexProviderForModel(e.model, t) === n);
-+}
-+function codexUseProviderFilteredModels(e) {
-+  let t = codexPickerProviderRoutingState(),
-+    [n, r] = CodexProviderPatchReact.useState(t.revision);
-+  CodexProviderPatchReact.useEffect(() => {
-+    let e = (e) => r(e);
-+    return (
-+      t.listeners.add(e),
-+      r(t.revision),
-+      codexPickerLoadProviderRoutingConfig(),
-+      () => {
-+        t.listeners.delete(e);
-+      }
-+    );
-+  }, [t]);
-+  let i = t.config,
-+    a = t.selectedProvider ?? codexReadCustomProviderChoice(i);
-+  return CodexProviderPatchReact.useMemo(
-+    () => codexFilterModelsForProvider(e, i, a),
-+    [e, i, a, n],
-+  );
-+}
-+function codexCanonicalModelSlug(e) {
-+  return e.startsWith(`cx/`) ? e.slice(3) : e;
-+}
-+function codexFindProviderModelReplacement(e, t) {
-+  if (e == null || e.length === 0 || e.some((e) => e.model === t)) return null;
-+  let n = codexCanonicalModelSlug(t),
-+    r = e.find((e) => codexCanonicalModelSlug(e.model) === n);
-+  return r ?? e[0];
-+}
-+function codexReplacementReasoningEffort(e, t) {
-+  return e.supportedReasoningEfforts?.some((e) => e.reasoningEffort === t)
-+    ? t
-+    : e.defaultReasoningEffort;
-+}
 +function CodexCustomProviderPickerSection() {
 +  let r = codexPickerProviderRoutingState(),
 +    [e, t] = CodexProviderPatchReact.useState(r.config),
@@ -475,8 +400,11 @@ PICKER_DIFF = r"""@@ -548655,6 +548655,204 @@
 +    return (
 +      codexPickerLoadProviderRoutingConfig(!0).then((n) => {
 +        if (e) {
-+          let r = codexPickerProviderRoutingState();
-+          (t(n), i(r.error), o(r.selectedProvider));
++          let e = codexReadCustomProviderChoice(n);
++          (t(n),
++            i(codexPickerProviderRoutingState().error),
++            codexWriteCustomProviderChoice(e),
++            o(e));
 +        }
 +      }),
 +      () => {
@@ -485,7 +413,7 @@ PICKER_DIFF = r"""@@ -548655,6 +548655,204 @@
 +    );
 +  }, []);
 +  let s = (e) => (t) => {
-+      (t?.preventDefault(), o(codexPickerSetCustomProviderChoice(e)));
++      (t?.preventDefault(), codexWriteCustomProviderChoice(e), o(e));
 +    },
 +    c = e.providers.map((e) =>
 +      (0, wQ.jsx)(
@@ -542,24 +470,6 @@ PICKER_DIFF = r"""@@ -548655,6 +548655,204 @@
      ((eMs = c()),
 +      (CodexProviderPatchReact = r(o(), 1)),
        fd(),
-@@ -550030,7 +550030,7 @@
-     { data: y, status: b } = UM({
-       additionalAvailableModels: void 0,
-       hostId: d.hostId,
-     }),
--    x = y?.models,
-+    x = codexUseProviderFilteredModels(y?.models),
-     S = g.model;
-@@ -550170,6 +550170,6 @@
--  function Se(e, t) {
-+  CodexProviderPatchReact.useEffect(() => {
-+    let e = codexFindProviderModelReplacement(x, S);
-+    if (e == null) return;
-+    xe(e.model, codexReplacementReasoningEffort(e, g.reasoningEffort));
-+  }, [x, S, g.reasoningEffort]);
-+  function Se(e, t) {
-     return v(e, t);
-   }
 """
 
 
@@ -705,7 +615,7 @@ def print_completion_summary(
     )
     terminal_bullet(
         "model_providers",
-        "Maps model slugs for picker filtering; model IDs do not choose a request provider.",
+        "Retained for generated-config compatibility; model IDs do not choose a provider.",
     )
     terminal_bullet(
         "default_provider",
