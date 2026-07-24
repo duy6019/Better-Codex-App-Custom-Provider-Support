@@ -369,6 +369,8 @@ class PatcherTemplateTests(unittest.TestCase):
 +              ye,""",
             patcher.PICKER_DIFF,
         )
+        # A unified-diff edit of the native root content includes this line.
+        self.assertNotIn("children: ye", patcher.PICKER_DIFF)
         self.assertIn(
             """+          children: (0, Kcs.jsxs)(Kcs.Fragment, {
 +            children: [
