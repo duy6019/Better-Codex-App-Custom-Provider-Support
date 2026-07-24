@@ -1835,6 +1835,104 @@ def _windows_registration_query_script(
     return "\n".join(lines)
 
 
+def _windows_candidate_registration_snapshot_script(
+    custom_name: str,
+    *,
+    expected_full_name: str = "",
+    expected_family_name: str = "",
+    expected_publisher: str = "",
+    expected_version: str = "",
+) -> str:
+    """Return full names of every registration matching a candidate identity."""
+
+    lines = ["$ErrorActionPreference = 'Stop'"]
+    escaped_name = custom_name.replace("'", "''")
+    conditions = [f"$_.Name -eq '{escaped_name}'"]
+    if expected_full_name:
+        conditions.append(
+            f"$_.PackageFullName -eq "
+            f"'{expected_full_name.replace(chr(39), chr(39) * 2)}'"
+        )
+    if expected_family_name:
+        conditions.append(
+            f"$_.PackageFamilyName -eq "
+            f"'{expected_family_name.replace(chr(39), chr(39) * 2)}'"
+        )
+    if expected_publisher:
+        conditions.append(
+            f"$_.Publisher -eq "
+            f"'{expected_publisher.replace(chr(39), chr(39) * 2)}'"
+        )
+    if expected_version:
+        conditions.append(
+            f"$_.Version.ToString() -eq "
+            f"'{expected_version.replace(chr(39), chr(39) * 2)}'"
+        )
+    lines.extend(
+        [
+            f"$packages = @(Get-AppxPackage -Name '{escaped_name}')",
+            "$candidateMatches = @($packages | Where-Object {",
+            "  " + " -and ".join(conditions),
+            "})",
+            "@($candidateMatches | Select-Object -ExpandProperty PackageFullName) | "
+            "ConvertTo-Json -Compress",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _snapshot_windows_candidate_registrations(
+    command_runner: Any,
+    custom_name: str,
+    *,
+    expected_full_name: str = "",
+    expected_family_name: str = "",
+    expected_publisher: str = "",
+    expected_version: str = "",
+) -> set[str]:
+    """Capture candidate-matching registrations before Add-AppxPackage runs."""
+
+    command = _windows_powershell_command(
+        _windows_candidate_registration_snapshot_script(
+            custom_name,
+            expected_full_name=expected_full_name,
+            expected_family_name=expected_family_name,
+            expected_publisher=expected_publisher,
+            expected_version=expected_version,
+        )
+    )
+    try:
+        result = command_runner(command)
+    except PatchError:
+        raise
+    except Exception as exc:
+        raise PatchError(
+            "Could not snapshot matching custom Windows package registrations"
+        ) from exc
+    if getattr(result, "returncode", 0) != 0:
+        raise PatchError("Could not snapshot matching custom Windows package registrations")
+    output = getattr(result, "stdout", "") or ""
+    try:
+        payload = json.loads(output.strip()) if output.strip() else []
+    except json.JSONDecodeError as exc:
+        raise PatchError(
+            "Custom Windows package registration snapshot returned invalid JSON"
+        ) from exc
+    if isinstance(payload, str):
+        values = [payload]
+    elif isinstance(payload, list) and all(isinstance(value, str) for value in payload):
+        values = payload
+    else:
+        raise PatchError(
+            "Custom Windows package registration snapshot returned invalid JSON"
+        )
+    if any(not value.strip() for value in values):
+        raise PatchError(
+            "Custom Windows package registration snapshot omitted PackageFullName"
+        )
+    return set(values)
+
+
 def _windows_remove_script(custom_name: str, package_full_name: str) -> str:
     escaped_name = custom_name.replace("'", "''")
     escaped_full_name = package_full_name.replace("'", "''")
@@ -1967,7 +2065,7 @@ def _verify_windows_custom_package(
 ) -> dict[str, Any]:
     if not payload:
         raise PatchError("The custom Windows package is not registered")
-    for field in ("PackageFullName", "PackageFamilyName", "Version"):
+    for field in ("PackageFullName", "PackageFamilyName", "Publisher", "Version"):
         value = payload.get(field)
         if not isinstance(value, str) or not value.strip():
             raise PatchError(
@@ -2024,6 +2122,7 @@ def _recover_windows_deployment(
     custom_full_name: str,
     had_previous: bool,
     expected_metadata: dict[str, Any] | None = None,
+    preexisting_candidate_full_names: set[str] | None = None,
     registration_attempted: bool = False,
     registration_succeeded: bool = False,
 ) -> list[str]:
@@ -2078,7 +2177,7 @@ def _recover_windows_deployment(
             custom_full_name = str(registered.get("PackageFullName") or "")
         except Exception as exc:
             failures.append(f"establish candidate package identity: {exc}")
-    if custom_full_name:
+    if custom_full_name and custom_full_name not in (preexisting_candidate_full_names or set()):
         try:
             _run_windows_package_command(
                 command_runner,
@@ -2193,6 +2292,7 @@ def deploy_windows_msix(
     snapshot_created = False
     registration_attempted = False
     registration_succeeded = False
+    preexisting_candidate_full_names: set[str] = set()
     custom_name = _windows_custom_name(paths)
     custom_full_name = ""
     expected_metadata: dict[str, Any] = {}
@@ -2268,6 +2368,15 @@ def deploy_windows_msix(
             snapshot_windows_active(paths)
             snapshot_created = True
 
+        preexisting_candidate_full_names = _snapshot_windows_candidate_registrations(
+            command_runner,
+            custom_name,
+            expected_full_name=post_expected_full_name,
+            expected_family_name=post_expected_family_name,
+            expected_publisher=post_expected_publisher,
+            expected_version=post_expected_version,
+        )
+
         add_command = _windows_powershell_command(
             _windows_add_script(
                 candidate_msix,
@@ -2326,6 +2435,7 @@ def deploy_windows_msix(
             custom_full_name=custom_full_name,
             had_previous=snapshot_created,
             expected_metadata=post_expected_metadata,
+            preexisting_candidate_full_names=preexisting_candidate_full_names,
             registration_attempted=registration_attempted,
             registration_succeeded=registration_succeeded,
         )

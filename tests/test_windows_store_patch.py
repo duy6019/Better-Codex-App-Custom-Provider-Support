@@ -255,6 +255,7 @@ class WindowsRollbackTests(unittest.TestCase):
                 "Name": "OpenAI.ChatGPT.CodexPatch",
                 "PackageFullName": f"OpenAI.ChatGPT.CodexPatch_{version}_x64__local",
                 "PackageFamilyName": "OpenAI.ChatGPT.CodexPatch_local",
+                "Publisher": "CN=Codex Provider Patch",
                 "Version": version,
                 "InstallLocation": str(install),
             }
@@ -348,7 +349,9 @@ class WindowsRollbackTests(unittest.TestCase):
                 candidate,
                 paths,
                 command_runner=lambda command: completed(
-                    command, payload if "ConvertTo-Json" in command[-1] else ""
+                    command,
+                    "[]" if "Select-Object -ExpandProperty PackageFullName" in command[-1]
+                    else payload if "ConvertTo-Json" in command[-1] else "",
                 ),
             )
             self.assertEqual((paths.active / candidate.name).read_bytes(), b"new")
@@ -383,17 +386,24 @@ class WindowsRollbackTests(unittest.TestCase):
                 paths,
                 command_runner=lambda command: calls.append(command)
                 or completed(
-                    command, payload if "ConvertTo-Json" in command[-1] else ""
+                    command,
+                    "[]" if "Select-Object -ExpandProperty PackageFullName" in command[-1]
+                    else payload if "ConvertTo-Json" in command[-1] else "",
                 ),
             )
 
-            install_script = calls[0][-1]
+            install_script = next(command[-1] for command in calls if "Add-AppxPackage" in command[-1])
             self.assertIn("OpenAI.ChatGPT.CodexPatch", install_script)
             self.assertLess(
                 install_script.index("ExecutablePath.StartsWith"),
                 install_script.index("Add-AppxPackage"),
             )
-            verification_script = calls[1][-1]
+            verification_script = next(
+                command[-1]
+                for command in calls
+                if "ConvertTo-Json" in command[-1]
+                and patcher.PATCH_MARKER.decode() in command[-1]
+            )
             self.assertIn("Get-AppxPackage", verification_script)
             self.assertIn(patcher.PATCH_MARKER.decode(), verification_script)
 
@@ -408,7 +418,9 @@ class WindowsRollbackTests(unittest.TestCase):
 
             def runner(command):
                 calls.append(command)
-                if "Add-AppxPackage" in command[-1] and len(calls) == 1:
+                if "Select-Object -ExpandProperty PackageFullName" in command[-1]:
+                    return completed(command, "[]")
+                if "Add-AppxPackage" in command[-1]:
                     raise patcher.PatchError("deployment failed")
                 return completed(command)
 
@@ -429,7 +441,9 @@ class WindowsRollbackTests(unittest.TestCase):
 
             def runner(command):
                 calls.append(command)
-                if "Add-AppxPackage" in command[-1] and len(calls) == 1:
+                if "Select-Object -ExpandProperty PackageFullName" in command[-1]:
+                    return completed(command, "[]")
+                if "Add-AppxPackage" in command[-1]:
                     (paths.previous / "ChatGPT-CodexPatch.msix").unlink()
                     raise patcher.PatchError("deployment failed")
                 return completed(command)
@@ -453,7 +467,9 @@ class WindowsRollbackTests(unittest.TestCase):
 
             def runner(command):
                 calls.append(command)
-                if "Add-AppxPackage" in command[-1] and len(calls) == 1:
+                if "Select-Object -ExpandProperty PackageFullName" in command[-1]:
+                    return completed(command, "[]")
+                if "Add-AppxPackage" in command[-1]:
                     shutil.rmtree(paths.previous)
                     raise patcher.PatchError("deployment failed")
                 return completed(command)
@@ -479,6 +495,7 @@ class WindowsRollbackTests(unittest.TestCase):
                     "Name": "OpenAI.ChatGPT.CodexPatch",
                     "PackageFullName": "OpenAI.ChatGPT.CodexPatch_1.2.3.4_x64__local",
                     "PackageFamilyName": "OpenAI.ChatGPT.CodexPatch_local",
+                    "Publisher": "CN=Codex Provider Patch",
                     "Version": "1.2.3.4",
                     "InstallLocation": str(install),
                 }
@@ -487,6 +504,8 @@ class WindowsRollbackTests(unittest.TestCase):
 
             def runner(command):
                 calls.append(command)
+                if "Select-Object -ExpandProperty PackageFullName" in command[-1]:
+                    return completed(command, "[]")
                 if "ConvertTo-Json" in command[-1]:
                     return completed(command, payload)
                 return completed(command)
@@ -567,16 +586,23 @@ class WindowsRollbackTests(unittest.TestCase):
                     "Name": "OpenAI.ChatGPT.CodexPatch",
                     "PackageFullName": "custom-full-name",
                     "PackageFamilyName": "custom-family",
+                    "Publisher": "CN=Codex Provider Patch",
                     "Version": "1.2.3.4",
                     "InstallLocation": str(installed),
                 }
             )
             calls = []
+            add_calls = 0
 
             def runner(command):
+                nonlocal add_calls
                 calls.append(command)
-                if "Add-AppxPackage" in command[-1] and len(calls) == 1:
-                    raise patcher.PatchError("deployment failed")
+                if "Select-Object -ExpandProperty PackageFullName" in command[-1]:
+                    return completed(command, "[]")
+                if "Add-AppxPackage" in command[-1]:
+                    add_calls += 1
+                    if add_calls == 1:
+                        raise patcher.PatchError("deployment failed")
                 if "ConvertTo-Json" in command[-1]:
                     return completed(command, payload)
                 return completed(command)
@@ -612,6 +638,7 @@ class WindowsRollbackTests(unittest.TestCase):
                     {
                         "custom_package_name": "OpenAI.ChatGPT.CodexPatch",
                         "custom_package_full_name": "previous-full-name",
+                        "custom_package_publisher": "CN=Codex Provider Patch",
                         "source_version": "1.0.0.0",
                     }
                 ),
@@ -621,11 +648,17 @@ class WindowsRollbackTests(unittest.TestCase):
             candidate.write_bytes(b"candidate")
             payload = self._installed_payload(root, version="1.0.0.0")
             calls = []
+            add_calls = 0
 
             def runner(command):
+                nonlocal add_calls
                 calls.append(command)
-                if "Add-AppxPackage" in command[-1] and len(calls) == 1:
-                    raise patcher.PatchError("deployment failed")
+                if "Select-Object -ExpandProperty PackageFullName" in command[-1]:
+                    return completed(command, "[]")
+                if "Add-AppxPackage" in command[-1]:
+                    add_calls += 1
+                    if add_calls == 1:
+                        raise patcher.PatchError("deployment failed")
                 if "ConvertTo-Json" in command[-1]:
                     return completed(command, payload)
                 return completed(command)
@@ -780,6 +813,7 @@ class WindowsRollbackTests(unittest.TestCase):
                     "Name": "OpenAI.ChatGPT.CodexPatch",
                     "PackageFullName": package_full_name,
                     "PackageFamilyName": "OpenAI.ChatGPT.CodexPatch_local",
+                    "Publisher": "CN=Codex Provider Patch",
                     "Version": "1.2.3.4",
                     "InstallLocation": str(install),
                 }
@@ -789,6 +823,8 @@ class WindowsRollbackTests(unittest.TestCase):
             def runner(command):
                 script = command[-1]
                 calls.append(script)
+                if "Select-Object -ExpandProperty PackageFullName" in script:
+                    return completed(command, "[]")
                 if "Add-AppxPackage" in script:
                     return completed(command)
                 if "ConvertTo-Json" in script:
@@ -875,6 +911,8 @@ class WindowsRollbackTests(unittest.TestCase):
 
             def runner(command):
                 calls.append(command[-1])
+                if "Select-Object -ExpandProperty PackageFullName" in command[-1]:
+                    return completed(command, "[]")
                 if "ConvertTo-Json" in command[-1]:
                     return completed(command, payload)
                 return completed(command)
@@ -885,7 +923,12 @@ class WindowsRollbackTests(unittest.TestCase):
                 command_runner=runner,
             )
 
-            install_script, verification_script = calls[:2]
+            install_script = next(script for script in calls if "Add-AppxPackage" in script)
+            verification_script = next(
+                script
+                for script in calls
+                if "ConvertTo-Json" in script and patcher.PATCH_MARKER.decode() in script
+            )
             self.assertNotIn("Select-Object -First 1", install_script)
             self.assertIn(
                 "PackageFullName -eq "
@@ -961,13 +1004,20 @@ class WindowsRollbackTests(unittest.TestCase):
             def runner(command):
                 script = command[-1]
                 scripts.append(script)
+                if "Select-Object -ExpandProperty PackageFullName" in script:
+                    return completed(command, "[]")
                 if "ConvertTo-Json" in script:
                     return completed(command, payload)
                 return completed(command)
 
             patcher.deploy_windows_msix(candidate, paths, command_runner=runner)
 
-            add_script, query_script = scripts[:2]
+            add_script = next(script for script in scripts if "Add-AppxPackage" in script)
+            query_script = next(
+                script
+                for script in scripts
+                if "ConvertTo-Json" in script and patcher.PATCH_MARKER.decode() in script
+            )
             self.assertIn(
                 "PackageFullName -eq "
                 "'OpenAI.ChatGPT.CodexPatch_1.0.0.0_x64__managed'",
@@ -1022,6 +1072,8 @@ class WindowsRollbackTests(unittest.TestCase):
             def runner(command):
                 script = command[-1]
                 scripts.append(script)
+                if "Select-Object -ExpandProperty PackageFullName" in script:
+                    return completed(command, "[]")
                 if "Add-AppxPackage" in script:
                     raise patcher.PatchError("Add-AppxPackage failed after registration")
                 if "ConvertTo-Json" in script:
@@ -1064,11 +1116,96 @@ class WindowsRollbackTests(unittest.TestCase):
 
             def runner(command):
                 script = command[-1]
+                if "Select-Object -ExpandProperty PackageFullName" in script:
+                    return completed(command, "[]")
                 if "ConvertTo-Json" in script:
                     return completed(command, malformed_payload)
                 return completed(command)
 
             with self.assertRaisesRegex(patcher.PatchError, "PackageFamilyName"):
+                patcher.deploy_windows_msix(candidate, paths, command_runner=runner)
+
+            self.assertFalse(paths.active.exists())
+
+    def test_first_install_rejection_never_removes_preexisting_matching_package(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = patcher.windows_patch_paths(root)
+            candidate = root / "candidate.msix"
+            with zipfile.ZipFile(candidate, "w") as package:
+                package.writestr(
+                    "AppxManifest.xml",
+                    '<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">'
+                    '<Identity Name="OpenAI.ChatGPT.CodexPatch" '
+                    'Publisher="CN=Unmanaged" Version="2.0.0.0" />'
+                    "</Package>",
+                )
+            unmanaged_full_name = (
+                "OpenAI.ChatGPT.CodexPatch_2.0.0.0_x64__unmanaged"
+            )
+            registration = json.dumps(
+                {
+                    "Name": "OpenAI.ChatGPT.CodexPatch",
+                    "PackageFullName": unmanaged_full_name,
+                    "PackageFamilyName": "OpenAI.ChatGPT.CodexPatch_unmanaged",
+                    "Publisher": "CN=Unmanaged",
+                    "Version": "2.0.0.0",
+                    "InstallLocation": str(root / "unmanaged"),
+                }
+            )
+            scripts = []
+
+            def runner(command):
+                script = command[-1]
+                scripts.append(script)
+                if "Add-AppxPackage" in script:
+                    raise patcher.PatchError("unmanaged package is already registered")
+                if "Select-Object -ExpandProperty PackageFullName" in script:
+                    return completed(command, json.dumps([unmanaged_full_name]))
+                if "ConvertTo-Json" in script:
+                    return completed(command, registration)
+                return completed(command)
+
+            with self.assertRaisesRegex(
+                patcher.PatchError, "unmanaged package is already registered"
+            ):
+                patcher.deploy_windows_msix(candidate, paths, command_runner=runner)
+
+            self.assertTrue(any("ConvertTo-Json" in script for script in scripts))
+            self.assertFalse(
+                any("Remove-AppxPackage" in script for script in scripts),
+                "recovery must retain a registration that predates Add-AppxPackage",
+            )
+
+    def test_registration_verification_rejects_missing_publisher(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = patcher.windows_patch_paths(root)
+            candidate = root / "candidate.msix"
+            candidate.write_bytes(b"candidate")
+            install = root / "installed-candidate"
+            (install / "resources").mkdir(parents=True)
+            (install / "resources" / "app.asar").write_bytes(patcher.PATCH_MARKER)
+            malformed_payload = json.dumps(
+                {
+                    "Name": "OpenAI.ChatGPT.CodexPatch",
+                    "PackageFullName": (
+                        "OpenAI.ChatGPT.CodexPatch_2.0.0.0_x64__candidate"
+                    ),
+                    "PackageFamilyName": "OpenAI.ChatGPT.CodexPatch_candidate",
+                    "Version": "2.0.0.0",
+                    "InstallLocation": str(install),
+                }
+            )
+
+            def runner(command):
+                if "Select-Object -ExpandProperty PackageFullName" in command[-1]:
+                    return completed(command, "[]")
+                if "ConvertTo-Json" in command[-1]:
+                    return completed(command, malformed_payload)
+                return completed(command)
+
+            with self.assertRaisesRegex(patcher.PatchError, "Publisher"):
                 patcher.deploy_windows_msix(candidate, paths, command_runner=runner)
 
             self.assertFalse(paths.active.exists())
