@@ -176,6 +176,61 @@ class SynchronizeTests(unittest.TestCase):
             self.assertFalse(toml_path.exists())
 
 
+class ProviderRoutingMergeTests(unittest.TestCase):
+    def test_merge_keeps_unrelated_provider_and_model_mapping(self):
+        generated = sync.provider_routing([{"slug": "cx/gpt-5.6-sol"}])
+        existing = {
+            "version": 1,
+            "default_provider": "openai",
+            "providers": [
+                {"id": "openai", "label": "Old OpenAI"},
+                {"id": "acme", "label": "Acme", "description": "Custom"},
+            ],
+            "model_providers": {"acme/gpt-5.6-sol": "acme"},
+        }
+
+        merged = sync.merge_provider_routing(generated, existing)
+
+        self.assertEqual(merged["default_provider"], "openai")
+        self.assertEqual(
+            [provider["id"] for provider in merged["providers"]],
+            ["openai", "9router", "acme"],
+        )
+        self.assertEqual(merged["providers"][0]["label"], "ChatGPT / OpenAI")
+        self.assertEqual(merged["model_providers"]["cx/gpt-5.6-sol"], "9router")
+        self.assertEqual(merged["model_providers"]["acme/gpt-5.6-sol"], "acme")
+
+    def test_synchronize_rejects_invalid_existing_routing_json(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            routing_path = root / "routing.json"
+            routing_path.write_text("not json", encoding="utf-8")
+            result = subprocess.CompletedProcess(
+                ["codex", "debug", "models", "--bundled"],
+                0,
+                stdout=json.dumps(FIXTURE_CATALOG),
+                stderr="",
+            )
+
+            with self.assertRaisesRegex(sync.SyncError, "provider-routing JSON"):
+                sync.synchronize(
+                    "codex",
+                    root / "catalog.json",
+                    routing_path,
+                    root / "config.toml",
+                    "http://127.0.0.1:20128/v1",
+                    command_runner=mock.Mock(return_value=result),
+                )
+
+    def test_read_provider_routing_rejects_missing_required_collections(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            routing_path = Path(temporary) / "routing.json"
+            routing_path.write_text('{"version": 1}', encoding="utf-8")
+
+            with self.assertRaisesRegex(sync.SyncError, "providers or model_providers"):
+                sync.read_provider_routing(routing_path)
+
+
 class PatcherTemplateTests(unittest.TestCase):
     def test_patcher_default_template_uses_9router(self):
         self.assertEqual(patcher.DEFAULT_PROVIDER_CONFIG["providers"][1]["id"], "9router")

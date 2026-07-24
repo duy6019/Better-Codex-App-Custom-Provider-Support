@@ -13,7 +13,7 @@ import stat
 import subprocess
 import sys
 import tempfile
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Optional, Sequence
 from urllib.parse import urlparse
 
 
@@ -200,6 +200,82 @@ def atomic_write_json(path: Path, data: dict[str, Any]) -> None:
     atomic_write_text(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
 
 
+def read_provider_routing(path: Path) -> Optional[dict[str, Any]]:
+    contents = read_text(path).strip()
+    if not contents:
+        return None
+    try:
+        routing = json.loads(contents)
+    except json.JSONDecodeError as exc:
+        raise SyncError("Existing provider-routing JSON is invalid") from exc
+    if not isinstance(routing, dict):
+        raise SyncError("Existing provider-routing JSON must be an object")
+
+    providers = routing.get("providers")
+    model_providers = routing.get("model_providers")
+    if not isinstance(providers, list) or not isinstance(model_providers, dict):
+        raise SyncError(
+            "Existing provider-routing JSON has invalid providers or model_providers"
+        )
+    if any(
+        not isinstance(provider, dict)
+        or not isinstance(provider.get("id"), str)
+        for provider in providers
+    ):
+        raise SyncError("Existing provider-routing JSON has an invalid provider entry")
+    return routing
+
+
+def merge_provider_routing(
+    generated: dict[str, Any], existing: Optional[dict[str, Any]]
+) -> dict[str, Any]:
+    if existing is None:
+        return generated
+
+    generated_ids = {provider["id"] for provider in generated["providers"]}
+    retained_providers = [
+        provider for provider in existing["providers"] if provider["id"] not in generated_ids
+    ]
+    model_providers = dict(existing["model_providers"])
+    model_providers.update(generated["model_providers"])
+    return {
+        "version": generated["version"],
+        "default_provider": existing.get(
+            "default_provider", generated["default_provider"]
+        ),
+        "providers": generated["providers"] + retained_providers,
+        "model_providers": model_providers,
+    }
+
+
+def upsert_provider_menu_entry(
+    routing: Optional[dict[str, Any]], provider_id: str, label: str
+) -> dict[str, Any]:
+    current = copy.deepcopy(routing) if routing is not None else {
+        "version": 1,
+        "default_provider": "openai",
+        "providers": [
+            {
+                "id": "openai",
+                "label": "ChatGPT / OpenAI",
+                "description": "Built-in provider; uses your signed-in ChatGPT account",
+            }
+        ],
+        "model_providers": {},
+    }
+    entry = {
+        "id": provider_id,
+        "label": label,
+        "description": (
+            f"Custom provider; uses [model_providers.{provider_id}] from config.toml"
+        ),
+    }
+    current["providers"] = [
+        provider for provider in current["providers"] if provider["id"] != provider_id
+    ] + [entry]
+    return current
+
+
 def read_bundled_catalog(
     codex_bin: str,
     *,
@@ -238,7 +314,9 @@ def synchronize(
 ) -> None:
     normalized_base_url = validate_base_url(base_url)
     bundled_catalog = read_bundled_catalog(codex_bin, command_runner=command_runner)
-    catalog, routing = build_catalog_and_routing(bundled_catalog)
+    existing_routing = read_provider_routing(routing_path)
+    catalog, generated_routing = build_catalog_and_routing(bundled_catalog)
+    routing = merge_provider_routing(generated_routing, existing_routing)
     updated_toml = update_codex_toml(read_text(toml_path), catalog_path, normalized_base_url)
 
     atomic_write_json(catalog_path, catalog)
