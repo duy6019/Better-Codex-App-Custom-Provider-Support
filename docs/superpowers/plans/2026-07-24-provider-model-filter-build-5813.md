@@ -39,7 +39,7 @@
 - Consumes: `patcher.PICKER_DIFF`, `patcher.CENTRAL_DIFF`, `patcher.parse_hunks`.
 - Produces: regression tests that fail against the current patch because the filtering helpers and model-picker hunk do not exist.
 
-- [ ] **Step 1: Write the failing static contract tests.**
+- [x] **Step 1: Write the failing static contract tests.**
 
 Add these methods:
 
@@ -90,7 +90,7 @@ def test_picker_reconciles_an_incompatible_selected_model(self):
     )
 ```
 
-- [ ] **Step 2: Add a real JavaScript behavior test for assignment and replacement.**
+- [x] **Step 2: Add a real JavaScript behavior test for assignment and replacement.**
 
 Extract the first `PICKER_DIFF` hunk into a Node `vm` context and exercise the
 helpers with a provider config and catalog:
@@ -143,7 +143,7 @@ process.stdout.write(JSON.stringify([filtered.map((item) => item.model), replace
 Add `import re` if the test module does not already import it; retain the
 existing `json` and `subprocess` imports.
 
-- [ ] **Step 3: Run the focused tests and verify the RED state.**
+- [x] **Step 3: Run the focused tests and verify the RED state.**
 
 Run:
 
@@ -159,7 +159,7 @@ python3 -m unittest \
 Expected: the tests fail because the current build-5813 picker patch has no
 filtering helpers or `x = codexUseProviderFilteredModels(y?.models)` hunk.
 
-- [ ] **Step 4: Commit the failing tests.**
+- [x] **Step 4: Commit the failing tests.**
 
 ```bash
 git add tests/test_sync_codex_models.py
@@ -176,7 +176,7 @@ git commit -m "test: specify provider-filtered build 5813 picker"
 - Consumes: existing normalized picker config and `CodexProviderPatchReact`.
 - Produces: `codexPickerSetCustomProviderChoice`, `codexProviderForModel`, `codexFilterModelsForProvider`, and `codexUseProviderFilteredModels`.
 
-- [ ] **Step 1: Extend shared picker state and config publication.**
+- [x] **Step 1: Extend shared picker state and config publication.**
 
 Replace the current state function with:
 
@@ -231,7 +231,7 @@ return codexPickerAcceptProviderRoutingConfig(
 );
 ```
 
-- [ ] **Step 2: Add assignment, filter, and subscription helpers.**
+- [x] **Step 2: Add assignment, filter, and subscription helpers.**
 
 Insert after `codexWriteCustomProviderChoice`:
 
@@ -291,7 +291,7 @@ function codexReplacementReasoningEffort(e, t) {
 }
 ```
 
-- [ ] **Step 3: Publish provider changes from the picker section.**
+- [x] **Step 3: Publish provider changes from the picker section.**
 
 Change the config-load effect body to:
 
@@ -310,7 +310,7 @@ let s = (e) => (t) => {
 },
 ```
 
-- [ ] **Step 4: Run the helper-focused tests and verify GREEN.**
+- [x] **Step 4: Run the helper-focused tests and verify GREEN.**
 
 Run the four tests that exercise the helpers and provider publication:
 
@@ -326,7 +326,7 @@ Expected: all four pass. The placement test
 `test_picker_filters_raw_models_before_composer_derivations` remains the only
 expected failure until Task 3 adds the composer hunk.
 
-- [ ] **Step 5: Commit the helper implementation.**
+- [x] **Step 5: Commit the helper implementation.**
 
 ```bash
 git add patch_chatgpt_providers.py
@@ -343,7 +343,7 @@ git commit -m "feat: add provider model filtering helpers"
 - Consumes: Task 2 helpers and current build-5813 composer function `DMs`.
 - Produces: a filtered `x` array used by every existing picker derivation and a safe effect for incompatible selected models.
 
-- [ ] **Step 1: Add the raw-model replacement hunk.**
+- [x] **Step 1: Add the raw-model replacement hunk.**
 
 Use this exact source context from the formatted build-5813 bundle:
 
@@ -361,7 +361,7 @@ Use this exact source context from the formatted build-5813 bundle:
 The diff applier ignores header line numbers but requires the unchanged lines
 to match exactly; keep the hunk's context exactly as shown.
 
-- [ ] **Step 2: Add the reconciliation effect before `function Se`.**
+- [x] **Step 2: Add the reconciliation effect before `function Se`.**
 
 Append this hunk after the existing `function xe` body and before
 `function Se(e, t)`:
@@ -383,7 +383,7 @@ Append this hunk after the existing `function xe` body and before
 The effect must run after the callback declaration, outside render-time code,
 and must not alter the explicit provider routing helpers.
 
-- [ ] **Step 3: Run focused tests and syntax checks.**
+- [x] **Step 3: Run focused tests and syntax checks.**
 
 Run:
 
@@ -397,7 +397,7 @@ git diff --check
 
 Expected: all focused tests pass and `git diff --check` prints no output.
 
-- [ ] **Step 4: Commit the consolidated-picker patch.**
+- [x] **Step 4: Commit the consolidated-picker patch.**
 
 ```bash
 git add patch_chatgpt_providers.py tests/test_sync_codex_models.py
@@ -408,13 +408,15 @@ git commit -m "feat: filter build 5813 models by provider"
 
 **Files:**
 - Modify: `README.md` provider configuration and updates sections.
+- Modify: `patch_chatgpt_providers.py` completion-summary copy.
+- Test: `tests/test_sync_codex_models.py` completion-summary contract.
 - Test: full `tests/` suite and temporary clean-original artifact.
 
 **Interfaces:**
 - Consumes: completed picker patch and existing provider config schema.
 - Produces: user-facing instructions and evidence that the live app was not modified.
 
-- [ ] **Step 1: Update README provider behavior.**
+- [x] **Step 1: Update README provider behavior.**
 
 After the provider menu explanation, add:
 
@@ -431,7 +433,14 @@ Update the generated-config bullets so `model_providers` says it is the active
 model-picker mapping as well as a compatibility field, while retaining the
 warning not to put credentials in the JSON file.
 
-- [ ] **Step 2: Run the complete test suite and CLI checks.**
+Add a focused completion-summary test, watch it fail against the legacy copy,
+then change the `model_providers` terminal bullet to:
+
+```python
+"Maps model slugs for picker filtering; model IDs do not choose a request provider."
+```
+
+- [x] **Step 2: Run the complete test suite and CLI checks.**
 
 ```bash
 python3 -m unittest -v
@@ -442,7 +451,7 @@ python3 sync_codex_models.py --help >/dev/null
 
 Expected: all tests pass, no diff-check output, and both help commands exit 0.
 
-- [ ] **Step 3: Build and inspect a temporary patched ASAR.**
+- [x] **Step 3: Build and inspect a temporary patched ASAR.**
 
 Run a Python verification script that calls
 `patcher.build_patched_artifacts(Path('/Applications/ChatGPT-original.backup'), temp_work)`,
@@ -458,7 +467,7 @@ assert "modelProviders: []" in source
 The script must also run `node --check` through the production build helper and
 must not call `install_patched_artifacts`.
 
-- [ ] **Step 4: Verify app identity and protected-file hashes.**
+- [x] **Step 4: Verify app identity and protected-file hashes.**
 
 ```bash
 /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' /Applications/ChatGPT-original.backup/Contents/Info.plist
@@ -467,10 +476,12 @@ shasum -a 256 /Applications/ChatGPT.app/Contents/Resources/app.asar /Application
 shasum -a 256 /Applications/ChatGPT.app/Contents/Info.plist /Applications/ChatGPT-original.backup/Contents/Info.plist
 ```
 
-Expected: version `26.721.30844`, build `5813`, and matching live/original
-hashes before any user-initiated install.
+Expected: version `26.721.30844` and build `5813`. Record each protected
+file's hash before and after automated verification and confirm it is stable.
+The live and original hashes may differ when the user has already installed an
+earlier patch; automated verification must not change either file.
 
-- [ ] **Step 5: Commit documentation and final verification evidence.**
+- [x] **Step 5: Commit documentation and final verification evidence.**
 
 ```bash
 git add README.md

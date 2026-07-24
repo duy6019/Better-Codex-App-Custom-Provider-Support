@@ -325,6 +325,26 @@ process.stdout.write(JSON.stringify([filtered.map((item) => item.model), replace
         self.assertIn("explicit provider selector", output.getvalue())
         self.assertNotIn("per-model provider routing", output.getvalue())
 
+    def test_completion_summary_describes_model_picker_mapping(self):
+        with (
+            mock.patch.object(patcher, "terminal_bullet") as bullet,
+            mock.patch.object(patcher, "terminal_status"),
+            mock.patch.object(patcher, "terminal_heading"),
+            mock.patch("builtins.print"),
+        ):
+            patcher.print_completion_summary(
+                Path("/tmp/desktop-model-providers.json"),
+                already_installed=True,
+            )
+
+        self.assertIn(
+            mock.call(
+                "model_providers",
+                "Maps model slugs for picker filtering; model IDs do not choose a request provider.",
+            ),
+            bullet.call_args_list,
+        )
+
     def test_installer_has_no_persistent_backup_directory_option(self):
         output = io.StringIO()
 

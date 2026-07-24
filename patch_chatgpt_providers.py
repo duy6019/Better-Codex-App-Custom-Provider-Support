@@ -705,7 +705,7 @@ def print_completion_summary(
     )
     terminal_bullet(
         "model_providers",
-        "Retained for generated-config compatibility; model IDs do not choose a provider.",
+        "Maps model slugs for picker filtering; model IDs do not choose a request provider.",
     )
     terminal_bullet(
         "default_provider",

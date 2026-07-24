@@ -5,6 +5,7 @@ An unofficial patch for the macOS ChatGPT/Codex desktop app that adds per-task m
 The patch:
 
 - Adds a provider section to the model menu.
+- Filters the model picker to models assigned to the selected provider.
 - Sends the explicitly selected provider when a new task starts or Side Chat forks.
 - Keeps tasks from all configured providers visible.
 - Keeps the normal ChatGPT login active for OpenAI models.
@@ -121,11 +122,18 @@ The sync script creates this file. A shortened example:
 
 - `providers` defines the providers displayed in the app menu.
 - `default_provider` is used when the saved provider choice is missing or from an older version.
-- `model_providers` is retained in the generated file for compatibility, but the desktop patch does not use model IDs to route requests.
+- `model_providers` maps model slugs for model-picker filtering; it does not derive the provider used for requests.
 - Every custom provider ID must match a `[model_providers.<id>]` section in `config.toml`.
 - API keys do not belong in this JSON file.
 
 The provider menu is explicit: it defaults to ChatGPT / OpenAI and has no Automatic mode. Select 9router before starting a task or using Side Chat with a 9router model. The selected provider is sent for both new tasks and forks. Changing the model does not switch providers automatically.
+
+The selected provider also filters the model picker. Models listed in
+`model_providers` appear only for their mapped provider; models not listed
+there appear under `default_provider`. When switching providers, the picker
+uses the matching `cx/` counterpart when available, otherwise the first model
+in the new provider's catalog. This affects new model selection only; it does
+not change the provider of an already-running conversation.
 
 The app reloads this file when the provider menu opens and before a new task starts or forks. Repatching is not required after running the sync script.
 
