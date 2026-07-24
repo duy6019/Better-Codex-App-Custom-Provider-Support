@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 from dataclasses import dataclass
 import getpass
 import json
@@ -116,8 +117,14 @@ def remove_toml_table(contents: str, table: str) -> str:
     return contents[: match.start()] + contents[end:]
 
 
-def windows_credential_lookup_script() -> str:
-    return r'''$source = @'
+def powershell_single_quoted(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def windows_credential_lookup_script(target_name: str) -> str:
+    script = r'''& {
+$target = __TARGET__
+$source = @'
 using System;
 using System.Runtime.InteropServices;
 public static class CredentialManager {
@@ -137,16 +144,25 @@ public static class CredentialManager {
 Add-Type -TypeDefinition $source
 $credential = [IntPtr]::Zero
 try {
-  if (-not [CredentialManager]::CredReadW($args[0], 1, 0, [ref]$credential)) { throw "Could not read Windows Credential Manager entry '$($args[0])'" }
+  if (-not [CredentialManager]::CredReadW($target, 1, 0, [ref]$credential)) { throw "Could not read Windows Credential Manager entry '$target'" }
   $entry = [Runtime.InteropServices.Marshal]::PtrToStructure($credential, [type][CredentialManager+CREDENTIAL])
   [Console]::Out.Write([Runtime.InteropServices.Marshal]::PtrToStringUni($entry.CredentialBlob, [int]($entry.CredentialBlobSize / 2)))
 } finally {
   if ($credential -ne [IntPtr]::Zero) { [CredentialManager]::CredFree($credential) }
+}
 }'''
+    return script.replace("__TARGET__", powershell_single_quoted(target_name))
 
 
-def windows_credential_write_script() -> str:
-    return r'''$source = @'
+def windows_credential_write_script(
+    target_name: str, username: str, api_key: str
+) -> str:
+    encoded_key = base64.b64encode(api_key.encode("utf-16le")).decode("ascii")
+    script = r'''& {
+$target = __TARGET__
+$username = __USERNAME__
+$apiKey = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('__API_KEY__'))
+$source = @'
 using System;
 using System.Runtime.InteropServices;
 public static class CredentialManager {
@@ -162,21 +178,30 @@ public static class CredentialManager {
 }
 '@
 Add-Type -TypeDefinition $source
-$target = [Runtime.InteropServices.Marshal]::StringToCoTaskMemUni($args[0])
-$username = [Runtime.InteropServices.Marshal]::StringToCoTaskMemUni($args[1])
-$bytes = [Text.Encoding]::Unicode.GetBytes($args[2])
-$blob = [Runtime.InteropServices.Marshal]::AllocCoTaskMem($bytes.Length)
+$targetPointer = [IntPtr]::Zero
+$usernamePointer = [IntPtr]::Zero
+$blob = [IntPtr]::Zero
 try {
+  $targetPointer = [Runtime.InteropServices.Marshal]::StringToCoTaskMemUni($target)
+  $usernamePointer = [Runtime.InteropServices.Marshal]::StringToCoTaskMemUni($username)
+  $bytes = [Text.Encoding]::Unicode.GetBytes($apiKey)
+  $blob = [Runtime.InteropServices.Marshal]::AllocCoTaskMem($bytes.Length)
   [Runtime.InteropServices.Marshal]::Copy($bytes, 0, $blob, $bytes.Length)
   $entry = New-Object CredentialManager+CREDENTIAL
-  $entry.Type = 1; $entry.TargetName = $target; $entry.UserName = $username
+  $entry.Type = 1; $entry.TargetName = $targetPointer; $entry.UserName = $usernamePointer
   $entry.CredentialBlobSize = $bytes.Length; $entry.CredentialBlob = $blob; $entry.Persist = 2
-  if (-not [CredentialManager]::CredWriteW([ref]$entry, 0)) { throw "Could not write Windows Credential Manager entry '$($args[0])'" }
+  if (-not [CredentialManager]::CredWriteW([ref]$entry, 0)) { throw "Could not write Windows Credential Manager entry '$target'" }
 } finally {
-  [Runtime.InteropServices.Marshal]::FreeCoTaskMem($target)
-  [Runtime.InteropServices.Marshal]::FreeCoTaskMem($username)
-  [Runtime.InteropServices.Marshal]::FreeCoTaskMem($blob)
+  if ($targetPointer -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::FreeCoTaskMem($targetPointer) }
+  if ($usernamePointer -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::FreeCoTaskMem($usernamePointer) }
+  if ($blob -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::FreeCoTaskMem($blob) }
+}
 }'''
+    return (
+        script.replace("__TARGET__", powershell_single_quoted(target_name))
+        .replace("__USERNAME__", powershell_single_quoted(username))
+        .replace("__API_KEY__", encoded_key)
+    )
 
 
 def update_provider_toml(
@@ -211,7 +236,7 @@ def update_provider_toml(
             (
                 'command = "powershell.exe"',
                 "args = " + json.dumps(
-                    ["-NoProfile", "-NonInteractive", "-Command", windows_credential_lookup_script(), keychain_service(provider_id)]
+                    ["-NoProfile", "-NonInteractive", "-Command", windows_credential_lookup_script(keychain_service(provider_id))]
                 ),
             )
         )
@@ -268,7 +293,9 @@ def store_api_key(
     if auth_method == "credential-manager":
         command = [
             "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
-            windows_credential_write_script(), keychain_service(provider_id), provider_id, api_key,
+            windows_credential_write_script(
+                keychain_service(provider_id), provider_id, api_key
+            ),
         ]
         try:
             command_runner(command, check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -332,7 +359,10 @@ def prompt_provider_setup(
         raise SetupError("Provider display name cannot be empty")
     base_url = validate_base_url(input_func("Base URL: "))
     wire_api = validate_wire_api(input_func("Wire API [responses]: ") or "responses")
-    default_method = default_auth_method(platform_name=platform_name)
+    try:
+        default_method = default_auth_method(platform_name=platform_name)
+    except SetupError:
+        default_method = "none"
     auth_method = validate_auth_method(
         input_func(
             f"Authentication [keychain/credential-manager/none] [{default_method}]: "

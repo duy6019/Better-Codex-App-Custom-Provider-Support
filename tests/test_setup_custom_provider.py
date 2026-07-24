@@ -56,7 +56,9 @@ class ProviderConfigurationTests(unittest.TestCase):
 
         self.assertIn('[model_providers.acme.auth]\ncommand = "powershell.exe"', updated)
         self.assertIn("CredRead", updated)
+        self.assertIn('"& {\\n', updated)
         self.assertIn("codex-acme", updated)
+        self.assertNotIn('", "codex-acme"]', updated)
         self.assertNotIn("test-key", updated)
 
     def test_no_auth_removes_existing_auth_table(self):
@@ -107,7 +109,23 @@ args = ["find-generic-password"]
         command = runner.call_args.args[0]
         self.assertEqual(command[:4], ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command"])
         self.assertIn("CredWrite", command[4])
-        self.assertEqual(command[5:], ["codex-acme", "acme", "test-key"])
+        self.assertTrue(command[4].startswith("& {\n"))
+        self.assertTrue(command[4].endswith("\n}"))
+        self.assertEqual(command[5:], [])
+
+    def test_store_windows_api_key_encodes_special_key_inside_command(self):
+        api_key = "test key & value"
+        runner = mock.Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+
+        setup.store_api_key(
+            "acme", api_key, "credential-manager",
+            command_runner=runner, platform_name="win32",
+        )
+
+        command = runner.call_args.args[0]
+        self.assertNotIn(api_key, command[4])
+        self.assertIn("FromBase64String", command[4])
+        self.assertIn("Text.Encoding]::Unicode.GetString", command[4])
 
     def test_setup_provider_does_not_store_key_for_no_auth(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -187,6 +205,20 @@ class InteractiveSetupTests(unittest.TestCase):
 
         provider, api_key = setup.prompt_provider_setup(
             input_func=lambda _: next(answers), getpass_func=key_prompt
+        )
+
+        self.assertEqual(provider.auth_method, "none")
+        self.assertIsNone(api_key)
+        key_prompt.assert_not_called()
+
+    def test_prompt_allows_no_auth_on_unsupported_platform(self):
+        answers = iter(["acme", "Acme", "https://api.acme.example/v1", "chat", "none"])
+        key_prompt = mock.Mock()
+
+        provider, api_key = setup.prompt_provider_setup(
+            input_func=lambda _: next(answers),
+            getpass_func=key_prompt,
+            platform_name="linux",
         )
 
         self.assertEqual(provider.auth_method, "none")
