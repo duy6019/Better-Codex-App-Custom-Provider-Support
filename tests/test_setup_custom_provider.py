@@ -18,8 +18,13 @@ class ProviderValidationTests(unittest.TestCase):
         self.assertEqual(setup.validate_provider_id("1router"), "1router")
         self.assertEqual(setup.validate_provider_id("123"), "123")
 
+    def test_validate_provider_id_accepts_previously_reserved_identifiers(self):
+        for provider_id in ("openai", "ollama", "lmstudio", "9router"):
+            with self.subTest(provider_id=provider_id):
+                self.assertEqual(setup.validate_provider_id(provider_id), provider_id)
+
     def test_validate_provider_id_rejects_reserved_or_invalid_identifiers(self):
-        for value in ("openai", "9router", "Acme", "has space"):
+        for value in ("Acme", "has space"):
             with self.subTest(value=value):
                 with self.assertRaisesRegex(setup.SetupError, "Provider ID"):
                     setup.validate_provider_id(value)
