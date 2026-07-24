@@ -221,15 +221,37 @@ CENTRAL_DIFF = r"""@@ -137534,6 +137678,131 @@
 """
 
 
-PICKER_DIFF = r"""@@ -521283,2 +521283,8 @@
-           onOpenChange: G,
--          children: ee,
-+          children: (0, Kcs.jsxs)(Kcs.Fragment, {
-+            children: [
-+              (0, Kcs.jsx)(CodexCustomProviderPickerSection, {}),
-+              ee,
-+            ],
-+          }),
+PICKER_DIFF = r"""@@ -520216,8 +520216,13 @@
+   t[43] === r.model
+     ? (ie = t[44])
+-    : ((ie = r.model == null ? null : (0, $X.jsx)($ss, { submenu: r.model })),
++    : ((ie =
++        r.model == null
++          ? null
++          : (0, $X.jsx)($ss, {
++              submenu: r.model,
++              providerPicker: !0,
++            })),
+       (t[43] = r.model),
+       (t[44] = ie));
+@@ -520323,10 +520328,17 @@
+       ? ((u = (0, $X.jsx)(Cos, {
+           ariaLabel: r,
+           contentClassName: i,
+           disabled: a,
+           flyoutHeader: o,
+           label: s,
+           value: c,
+-          children: l,
++          children: e.providerPicker
++            ? (0, $X.jsxs)($X.Fragment, {
++                children: [
++                  (0, $X.jsx)(CodexCustomProviderPickerSection, {}),
++                  l,
++                ],
++              })
++            : l,
+         })),
 @@ -548655,6 +548655,189 @@
  var Xjs,
    Zjs = e(() => {
@@ -425,15 +447,13 @@ PICKER_DIFF = r"""@@ -521283,2 +521283,8 @@
  function Qjs(e) {
    let t = (0, eMs.c)(164),
      {
-@@ -549830,1 +549830,7 @@
-           triggerButton: N,
--          children: ye,
-+          children: (0, TQ.jsxs)(TQ.Fragment, {
-+            children: [
-+              (0, TQ.jsx)(CodexCustomProviderPickerSection, {}),
-+              ye,
-+            ],
-+          }),
+@@ -548925,6 +549036,7 @@
+       : ((g = (0, TQ.jsxs)(TQ.Fragment, {
+           children: [
++            (0, TQ.jsx)(CodexCustomProviderPickerSection, {}),
+             m,
+             (0, TQ.jsx)(`div`, {
+               className: `vertical-scroll-fade-mask flex max-h-[250px] flex-col overflow-y-auto`,
 @@ -549575,6 +549577,8 @@
  }
  var eMs,

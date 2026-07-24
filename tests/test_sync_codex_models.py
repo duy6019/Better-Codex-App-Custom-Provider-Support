@@ -289,27 +289,70 @@ class PatcherTemplateTests(unittest.TestCase):
             self.assertIn(f"KR.{component}", provider_section)
             self.assertNotIn(f"yz.{component}", provider_section)
 
-    def test_provider_picker_is_wrapped_into_all_top_level_model_menus(self):
-        self.assertNotIn(
-            """          children: [
-            (0, TQ.jsx)(CodexCustomProviderPickerSection, {}),
-            m,""",
+    def test_provider_picker_is_rendered_in_model_choice_menus_only(self):
+        self.assertNotIn("YX.SimpleView", patcher.PICKER_DIFF)
+        self.assertIn(
+            """+        r.model == null
++          ? null
++          : (0, $X.jsx)($ss, {
++              submenu: r.model,
++              providerPicker: !0,
++            })""",
             patcher.PICKER_DIFF,
         )
         self.assertIn(
-            """+          children: (0, TQ.jsxs)(TQ.Fragment, {
-+            children: [
-+              (0, TQ.jsx)(CodexCustomProviderPickerSection, {}),
-+              ye,""",
+            """+          children: e.providerPicker
++            ? (0, $X.jsxs)($X.Fragment, {
++                children: [
++                  (0, $X.jsx)(CodexCustomProviderPickerSection, {}),
++                  l,""",
             patcher.PICKER_DIFF,
         )
         self.assertIn(
-            """+          children: (0, Kcs.jsxs)(Kcs.Fragment, {
-+            children: [
-+              (0, Kcs.jsx)(CodexCustomProviderPickerSection, {}),
-+              ee,""",
+            """           children: [
++            (0, TQ.jsx)(CodexCustomProviderPickerSection, {}),
+             m,""",
             patcher.PICKER_DIFF,
         )
+
+    def test_provider_picker_submenu_hunks_apply_to_the_model_menu(self):
+        model_hunk, submenu_hunk = patcher.parse_hunks(patcher.PICKER_DIFF)[:2]
+        diff = "\n".join(
+            (
+                "@@ -1,1 +1,1 @@",
+                *model_hunk,
+                "@@ -1,1 +1,1 @@",
+                *submenu_hunk,
+                "",
+            )
+        )
+        source = """  t[43] === r.model
+    ? (ie = t[44])
+    : ((ie = r.model == null ? null : (0, $X.jsx)($ss, { submenu: r.model })),
+      (t[43] = r.model),
+      (t[44] = ie));
+function $ss(e) {
+      ? ((u = (0, $X.jsx)(Cos, {
+          ariaLabel: r,
+          contentClassName: i,
+          disabled: a,
+          flyoutHeader: o,
+          label: s,
+          value: c,
+          children: l,
+        })),
+"""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            bundle = Path(temporary) / "picker.js"
+            bundle.write_text(source, encoding="utf-8")
+
+            patcher.apply_unified_diff(bundle, diff)
+
+            patched = bundle.read_text(encoding="utf-8")
+
+        self.assertIn("providerPicker: !0", patched)
+        self.assertIn("children: e.providerPicker", patched)
 
     def test_picker_import_hunk_tolerates_added_upstream_initializers(self):
         hunk = next(
