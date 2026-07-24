@@ -9,7 +9,9 @@ The patch:
 - Keeps tasks from all configured providers visible.
 - Keeps the normal ChatGPT login active for OpenAI models.
 
-This project currently supports **macOS only**.
+The desktop application patch is macOS-only. The standalone
+`setup_custom_provider.py` wizard supports macOS Keychain and Windows
+Credential Manager.
 
 > [!CAUTION]
 > Changing the provider in a running conversation/thread does **not** work. The conversation/thread continues using the provider it started with.
@@ -19,11 +21,14 @@ This project currently supports **macOS only**.
 
 ## Requirements
 
-- macOS
+- macOS for the desktop application patch
 - Official ChatGPT `26.721.31836`, build `5828`, installed at `/Applications/ChatGPT.app`
 - Python 3.9 or newer
 - Node.js with `npx`
 - Codex CLI available as `codex`
+
+Windows is supported for the standalone `setup_custom_provider.py` wizard with
+Windows Credential Manager; it does not support the desktop application patch.
 
 ## Install
 
@@ -95,11 +100,22 @@ Codex configuration files manually:
 python3 setup_custom_provider.py
 ```
 
+On Windows, run:
+
+```powershell
+py setup_custom_provider.py
+```
+
 The wizard asks for the provider ID, display name, base URL, wire API, and
-authentication mode. Choose `keychain` to store the API key in macOS Keychain
-under `codex-<provider-id>`; choose `none` for endpoints that do not require
+authentication mode. Choose the native secure-store option to keep the API key
+out of configuration files: `keychain` on macOS stores it in macOS Keychain,
+while `credential-manager` on Windows stores it as a Generic Credential in
+Windows Credential Manager. Choose `none` for endpoints that do not require
 authentication. The key is not written to `config.toml` or the provider-routing
-JSON file.
+JSON file. The stored credential is named `codex-<provider-id>`.
+
+The wizard supports macOS and Windows. The application patch remains
+macOS-specific.
 
 The provider is added to the desktop provider menu. This wizard does not create
 model catalog entries or model routing; choose a model supported by the endpoint,

@@ -63,6 +63,13 @@ class CatalogTests(unittest.TestCase):
 
 
 class TomlTests(unittest.TestCase):
+    def test_update_codex_toml_serializes_catalog_path_with_forward_slashes(self):
+        updated = sync.update_codex_toml(
+            "", Path("/tmp/custom.json"), "http://127.0.0.1:20128/v1"
+        )
+
+        self.assertIn('model_catalog_json = "/tmp/custom.json"', updated)
+
     def test_update_codex_toml_replaces_only_managed_entries(self):
         existing = """service_tier = \"default\"
 model_catalog_json = \"/old/custom.json\"
@@ -1041,6 +1048,7 @@ class PatchTransactionTests(unittest.TestCase):
             patched_plist = root / "patched.plist"
 
             with (
+                redirect_stdout(io.StringIO()),
                 mock.patch.object(patcher.sys, "platform", "darwin"),
                 mock.patch.object(patcher.shutil, "which", return_value="/usr/bin/npx"),
                 mock.patch.object(

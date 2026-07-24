@@ -14,7 +14,10 @@ import json
 import os
 from pathlib import Path
 import plistlib
-import pwd
+try:
+    import pwd
+except ModuleNotFoundError:
+    pwd = None
 import re
 import shlex
 import shutil
@@ -509,6 +512,18 @@ def terminal_width() -> int:
     return max(64, min(shutil.get_terminal_size((96, 24)).columns, 110))
 
 
+def terminal_detail_marker(stream: Any) -> str:
+    marker = "\u21b3 "
+    encoding = getattr(stream, "encoding", None)
+    if encoding is None:
+        return marker
+    try:
+        marker.encode(encoding)
+    except (LookupError, UnicodeEncodeError):
+        return "-> "
+    return marker
+
+
 def terminal_status(
     label: str,
     message: object,
@@ -539,7 +554,7 @@ def terminal_status(
             break_on_hyphens=False,
         ) or [""]
         for index, line in enumerate(detail_lines):
-            marker = "↳ " if index == 0 else "  "
+            marker = terminal_detail_marker(stream) if index == 0 else "  "
             print(
                 f"{'':{badge_width}}{color(marker + line, '2', stream=stream)}",
                 file=stream,
@@ -758,7 +773,7 @@ class FancyArgumentParser(argparse.ArgumentParser):
 
 def invoking_user_home() -> Path:
     sudo_user = os.environ.get("SUDO_USER")
-    if sudo_user and sudo_user != "root":
+    if sudo_user and sudo_user != "root" and pwd is not None:
         try:
             return Path(pwd.getpwnam(sudo_user).pw_dir)
         except KeyError:

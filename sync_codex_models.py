@@ -153,7 +153,7 @@ def replace_toml_table(contents: str, table: str, body: str) -> str:
 
 
 def update_codex_toml(contents: str, catalog_path: Path, base_url: str) -> str:
-    updated = update_root_setting(contents, "model_catalog_json", str(catalog_path))
+    updated = update_root_setting(contents, "model_catalog_json", catalog_path.as_posix())
     return replace_toml_table(
         updated,
         "model_providers.9router",

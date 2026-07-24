@@ -1,3 +1,4 @@
+import base64
 import json
 from pathlib import Path
 import subprocess
@@ -19,6 +20,17 @@ class ProviderValidationTests(unittest.TestCase):
                 with self.assertRaisesRegex(setup.SetupError, "Provider ID"):
                     setup.validate_provider_id(value)
 
+    def test_windows_default_auth_method_is_credential_manager(self):
+        self.assertEqual(
+            setup.default_auth_method(platform_name="win32"), "credential-manager"
+        )
+
+    def test_rejects_platform_incompatible_secure_store(self):
+        with self.assertRaisesRegex(setup.SetupError, "Windows Credential Manager"):
+            setup.validate_auth_method("keychain", platform_name="win32")
+        with self.assertRaisesRegex(setup.SetupError, "macOS Keychain"):
+            setup.validate_auth_method("credential-manager", platform_name="darwin")
+
 
 class ProviderConfigurationTests(unittest.TestCase):
     def test_keychain_auth_toml_contains_lookup_command_but_not_key(self):
@@ -27,13 +39,27 @@ class ProviderConfigurationTests(unittest.TestCase):
         )
 
         updated = setup.update_provider_toml(
-            '[model_providers.other]\nname = "Other"\n', provider
+            '[model_providers.other]\nname = "Other"\n', provider, platform_name="darwin"
         )
 
         self.assertIn('[model_providers.acme]\nname = "Acme"', updated)
         self.assertIn('[model_providers.acme.auth]\ncommand = "security"', updated)
         self.assertIn('"codex-acme"', updated)
         self.assertIn('[model_providers.other]\nname = "Other"', updated)
+        self.assertNotIn("test-key", updated)
+
+    def test_windows_credential_manager_auth_toml_uses_powershell_lookup(self):
+        provider = setup.ProviderSetup(
+            "acme", "Acme", "https://api.acme.example/v1", "responses", "credential-manager"
+        )
+
+        updated = setup.update_provider_toml("", provider, platform_name="win32")
+
+        self.assertIn('[model_providers.acme.auth]\ncommand = "powershell.exe"', updated)
+        self.assertIn("CredRead", updated)
+        self.assertIn('"& {\\n', updated)
+        self.assertIn("codex-acme", updated)
+        self.assertNotIn('", "codex-acme"]', updated)
         self.assertNotIn("test-key", updated)
 
     def test_no_auth_removes_existing_auth_table(self):
@@ -72,6 +98,48 @@ args = ["find-generic-password"]
                 "test-key",
             ],
         )
+
+    def test_store_windows_api_key_calls_powershell_credential_write(self):
+        runner = mock.Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+
+        setup.store_api_key(
+            "acme", "test-key", "credential-manager",
+            command_runner=runner, platform_name="win32",
+        )
+
+        command = runner.call_args.args[0]
+        self.assertEqual(command[:4], ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command"])
+        self.assertIn("CredWrite", command[4])
+        self.assertTrue(command[4].startswith("& {\n"))
+        self.assertTrue(command[4].endswith("\n}"))
+        self.assertEqual(command[5:], [])
+
+    def test_windows_credential_write_script_clears_unmanaged_and_managed_key_bytes(self):
+        script = setup.windows_credential_write_script("codex-acme", "acme")
+
+        self.assertIn(
+            "[Runtime.InteropServices.Marshal]::WriteByte($blob, $index, 0)",
+            script,
+        )
+        self.assertIn("[Array]::Clear($bytes, 0, $bytes.Length)", script)
+
+    def test_store_windows_api_key_passes_non_ascii_key_as_base64_stdin(self):
+        api_key = "test key & ค่า"
+        encoded_key = base64.b64encode(api_key.encode("utf-16le")).decode("ascii")
+        runner = mock.Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+
+        setup.store_api_key(
+            "acme", api_key, "credential-manager",
+            command_runner=runner, platform_name="win32",
+        )
+
+        command = runner.call_args.args[0]
+        self.assertNotIn(api_key, command[4])
+        self.assertNotIn(encoded_key, command[4])
+        self.assertIn("[Console]::In.ReadToEnd()", command[4])
+        self.assertIn("[Convert]::FromBase64String", command[4])
+        self.assertTrue(encoded_key.isascii())
+        self.assertEqual(runner.call_args.kwargs["input"], encoded_key)
 
     def test_setup_provider_does_not_store_key_for_no_auth(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -116,7 +184,9 @@ class InteractiveSetupTests(unittest.TestCase):
         answers = iter(["acme", "Acme", "https://api.acme.example/v1", "", ""])
 
         provider, api_key = setup.prompt_provider_setup(
-            input_func=lambda _: next(answers), getpass_func=lambda _: "test-key"
+            input_func=lambda _: next(answers),
+            getpass_func=lambda _: "test-key",
+            platform_name="darwin",
         )
 
         self.assertEqual(
@@ -131,12 +201,38 @@ class InteractiveSetupTests(unittest.TestCase):
         )
         self.assertEqual(api_key, "test-key")
 
+    def test_prompt_uses_credential_manager_default_on_windows(self):
+        answers = iter(["acme", "Acme", "https://api.acme.example/v1", "", ""])
+
+        provider, api_key = setup.prompt_provider_setup(
+            input_func=lambda _: next(answers),
+            getpass_func=lambda _: "test-key",
+            platform_name="win32",
+        )
+
+        self.assertEqual(provider.auth_method, "credential-manager")
+        self.assertEqual(api_key, "test-key")
+
     def test_prompt_allows_no_auth_without_requesting_key(self):
         answers = iter(["acme", "Acme", "https://api.acme.example/v1", "chat", "none"])
         key_prompt = mock.Mock()
 
         provider, api_key = setup.prompt_provider_setup(
             input_func=lambda _: next(answers), getpass_func=key_prompt
+        )
+
+        self.assertEqual(provider.auth_method, "none")
+        self.assertIsNone(api_key)
+        key_prompt.assert_not_called()
+
+    def test_prompt_allows_no_auth_on_unsupported_platform(self):
+        answers = iter(["acme", "Acme", "https://api.acme.example/v1", "chat", "none"])
+        key_prompt = mock.Mock()
+
+        provider, api_key = setup.prompt_provider_setup(
+            input_func=lambda _: next(answers),
+            getpass_func=key_prompt,
+            platform_name="linux",
         )
 
         self.assertEqual(provider.auth_method, "none")
@@ -173,6 +269,7 @@ class InteractiveSetupTests(unittest.TestCase):
                 routing_path,
                 api_key="test-key",
                 command_runner=runner,
+                platform_name="darwin",
             )
 
             self.assertIn(
@@ -183,7 +280,43 @@ class InteractiveSetupTests(unittest.TestCase):
             self.assertEqual(routing["providers"][-1]["id"], "acme")
 
 
+class MainTests(unittest.TestCase):
+    def test_main_confirms_windows_credential_manager_storage(self):
+        provider = setup.ProviderSetup(
+            "acme", "Acme", "https://api.acme.example/v1", "responses", "credential-manager"
+        )
+        args = mock.Mock(
+            config=Path("config.toml"),
+            provider_config=Path("desktop-model-providers.json"),
+        )
+
+        with (
+            mock.patch.object(setup, "parse_args", return_value=args),
+            mock.patch.object(setup, "prompt_provider_setup", return_value=(provider, "test-key")),
+            mock.patch.object(setup, "setup_provider"),
+            mock.patch("builtins.print") as print_mock,
+        ):
+            self.assertEqual(setup.main(), 0)
+
+        print_mock.assert_any_call(
+            "Stored API key in Windows Credential Manager entry: codex-acme"
+        )
+
+
 class DocumentationTests(unittest.TestCase):
+    def test_readme_documents_windows_credential_manager_without_a_literal_key(self):
+        readme = (Path(__file__).parents[1] / "README.md").read_text(encoding="utf-8")
+
+        self.assertIn("Windows Credential Manager", readme)
+        self.assertIn("credential-manager", readme)
+        self.assertIn("The desktop application patch is macOS-only", readme)
+        self.assertIn("py setup_custom_provider.py", readme)
+        self.assertNotIn("API_KEY_CUA_BAN", readme)
+
+    def test_setup_script_describes_platform_neutral_credential_support(self):
+        self.assertIn("native secure credential storage", setup.__doc__)
+        self.assertNotIn("macOS Keychain-backed", setup.__doc__)
+
     def test_readme_documents_custom_provider_setup_without_a_literal_key(self):
         readme = (Path(__file__).parents[1] / "README.md").read_text(encoding="utf-8")
         normalized_readme = " ".join(readme.split())
