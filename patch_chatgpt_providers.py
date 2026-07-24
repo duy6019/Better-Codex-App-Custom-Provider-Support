@@ -883,15 +883,22 @@ def discover_windows_store_package(command_runner: Any) -> WindowsStorePackage:
 
 
 def find_windows_sdk_tools(search_roots: Sequence[Path]) -> WindowsToolPaths:
+    missing_tool_error: PatchError | None = None
     for root in search_roots:
         for makeappx in sorted(root.rglob("MakeAppx.exe")):
             signtool = makeappx.with_name("SignTool.exe")
             if signtool.is_file():
                 return WindowsToolPaths(makeappx=makeappx, signtool=signtool)
         if any(root.rglob("MakeAppx.exe")):
-            raise PatchError(f"Windows SDK tool not found: SignTool.exe under {root}")
-        if any(root.rglob("SignTool.exe")):
-            raise PatchError(f"Windows SDK tool not found: MakeAppx.exe under {root}")
+            missing_tool_error = PatchError(
+                f"Windows SDK tool not found: SignTool.exe under {root}"
+            )
+        elif any(root.rglob("SignTool.exe")) and missing_tool_error is None:
+            missing_tool_error = PatchError(
+                f"Windows SDK tool not found: MakeAppx.exe under {root}"
+            )
+    if missing_tool_error is not None:
+        raise missing_tool_error
     raise PatchError("Windows SDK tools not found: MakeAppx.exe and SignTool.exe")
 
 
