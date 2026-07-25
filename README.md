@@ -26,7 +26,7 @@ Windows Credential Manager.
 
 ### macOS
 
-- Official ChatGPT `26.721.31836`, build `5828`, installed at
+- Official ChatGPT `26.721.41059`, build `5848`, installed at
   `/Applications/ChatGPT.app`
 - Python 3.9 or newer
 - Node.js with `npx`
@@ -250,7 +250,7 @@ starts or forks. Repatching is not required after running either setup command.
 ### macOS
 
 ChatGPT updates replace the patch. This revision supports the official
-ChatGPT `26.721.31836`, build `5828`. A newer app build may change the generated
+ChatGPT `26.721.41059`, build `5848`. A newer app build may change the generated
 JavaScript again; wait for a compatible patch revision before rerunning the
 installer.
 

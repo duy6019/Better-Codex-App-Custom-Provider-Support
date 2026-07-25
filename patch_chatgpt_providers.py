@@ -1583,7 +1583,7 @@ def parse_args() -> argparse.Namespace:
         "Windows SDK tools are required; Developer Mode is not required."
         if is_windows
         else "Add an explicit provider selector to the macOS ChatGPT/Codex desktop app. "
-        "Supports ChatGPT 26.721.31836 build 5828."
+        "Supports ChatGPT 26.721.41059 build 5848."
     )
     parser = FancyArgumentParser(
         description=description
