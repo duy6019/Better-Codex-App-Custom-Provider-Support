@@ -97,9 +97,9 @@ DEFAULT_PROVIDER_CONFIG: dict[str, Any] = {
 
 
 CENTRAL_DIFF = r"""@@ -137534,6 +137678,131 @@
- function p9t(e) {
-   if (`data` in e) return e;
-   let t = fbe(e);
+ function o9t(e) {
+  if (`data` in e) return e;
+  let t = abe(e);
    return t == null ? e : { ...e, data: t };
  }
 +function codexProviderRoutingFallback() {
@@ -179,12 +179,12 @@ CENTRAL_DIFF = r"""@@ -137534,6 +137678,131 @@
 +  return (
 +    (t.promise = (async () => {
 +      try {
-+        let { codexHome: e } = await rp(`codex-home`, {
++        let { codexHome: e } = await tp(`codex-home`, {
 +            params: { hostId: `local` },
 +          }),
 +          n = e.includes(`\\`) && !e.includes(`/`) ? `\\` : `/`,
 +          r = `${e.replace(/[\\/]+$/u, ``)}${n}desktop-model-providers.json`,
-+          { contents: i } = await rp(`read-file`, {
++          { contents: i } = await tp(`read-file`, {
 +            params: { hostId: `local`, path: r },
 +          }),
 +          a = codexNormalizeProviderRoutingConfig(JSON.parse(i));
@@ -234,7 +234,7 @@ CENTRAL_DIFF = r"""@@ -137534,6 +137678,131 @@
 +    return { ...t, modelProvider: await codexSelectedProvider() };
 +  return t;
 +}
- var m9t,
+ var s9t,
 @@ -137749,6 +137750,8 @@
          async sendRequest(e, t, n) {
            if (this.dispatchMessage == null)
@@ -256,51 +256,7 @@ CENTRAL_DIFF = r"""@@ -137534,6 +137678,131 @@
 """
 
 
-PICKER_DIFF = r"""@@ -520216,8 +520216,13 @@
-   t[43] === r.model
-     ? (ie = t[44])
--    : ((ie = r.model == null ? null : (0, $X.jsx)($ss, { submenu: r.model })),
-+    : ((ie =
-+        r.model == null
-+          ? null
-+          : (0, $X.jsx)($ss, {
-+              submenu: r.model,
-+              providerPicker: !0,
-+            })),
-       (t[43] = r.model),
-       (t[44] = ie));
-@@ -520323,10 +520328,17 @@
-       ? ((u = (0, $X.jsx)(Cos, {
-           ariaLabel: r,
-           contentClassName: i,
-           disabled: a,
-           flyoutHeader: o,
-           label: s,
-           value: c,
--          children: l,
-+          children: e.providerPicker
-+            ? (0, $X.jsxs)($X.Fragment, {
-+                children: [
-+                  (0, $X.jsx)(CodexCustomProviderPickerSection, {}),
-+                  l,
-+                ],
-+              })
-+            : l,
-         })),
-@@ -548655,6 +548655,189 @@
- var Xjs,
-   Zjs = e(() => {
-     (Ho(),
-       ed(),
-       DD(),
-       (Xjs = Oa(Q, (e, { get: t }) =>
-         Yjs({
-           conversationId: e,
-           resumeState: t(hD, e) ?? void 0,
-           turnCount: t(vD, e),
-         }),
-       )));
-   });
+PICKER_DIFF = r"""@@ -549535,6 +549535,189 @@
 +function codexPickerProviderRoutingFallback() {
 +  return {
 +    version: 1,
@@ -378,13 +334,13 @@ PICKER_DIFF = r"""@@ -520216,8 +520216,13 @@
 +  return (
 +    (t.promise = (async () => {
 +      try {
-+        let { codexHome: e } = await rp(`codex-home`, {
++        let { codexHome: e } = await tp(`codex-home`, {
 +            params: { hostId: `local` },
 +          }),
 +          n = e.includes(`\\`) && !e.includes(`/`) ? `\\` : `/`,
 +          r = `${e.replace(/[\\/]+$/u, ``)}${n}desktop-model-providers.json`;
 +        t.configPath = r;
-+        let { contents: i } = await rp(`read-file`, {
++        let { contents: i } = await tp(`read-file`, {
 +            params: { hostId: `local`, path: r },
 +          }),
 +          a = codexPickerNormalizeProviderRoutingConfig(JSON.parse(i));
@@ -444,14 +400,14 @@ PICKER_DIFF = r"""@@ -520216,8 +520216,13 @@
 +      (t?.preventDefault(), codexWriteCustomProviderChoice(e), o(e));
 +    },
 +    c = e.providers.map((e) =>
-+      (0, TQ.jsx)(
-+        KR.Item,
++      (0, wQ.jsx)(
++        yz.Item,
 +        {
-+          RightIcon: a === e.id ? Bm : void 0,
++          RightIcon: a === e.id ? Ym : void 0,
 +          SubText:
 +            e.description.length === 0
 +              ? null
-+              : (0, TQ.jsx)(`span`, {
++              : (0, wQ.jsx)(`span`, {
 +                  className: `text-token-description-foreground`,
 +                  children: e.description,
 +                }),
@@ -461,43 +417,43 @@ PICKER_DIFF = r"""@@ -520216,8 +520216,13 @@
 +        e.id,
 +      ),
 +    );
-+  return (0, TQ.jsxs)(TQ.Fragment, {
++  return (0, wQ.jsxs)(wQ.Fragment, {
 +    children: [
-+      (0, TQ.jsx)(KR.Title, { children: `Provider for new tasks` }),
++      (0, wQ.jsx)(yz.Title, { children: `Provider for new tasks` }),
 +      n == null
 +        ? null
-+        : (0, TQ.jsx)(KR.Item, {
++        : (0, wQ.jsx)(yz.Item, {
 +            disabled: !0,
-+            SubText: (0, TQ.jsx)(`span`, {
++            SubText: (0, wQ.jsx)(`span`, {
 +              className: `text-token-description-foreground`,
 +              children: n,
 +            }),
 +            children: `Provider config error — using fallback`,
 +          }),
 +      c,
-+      (0, TQ.jsx)(KR.Separator, {}),
++      (0, wQ.jsx)(yz.Separator, {}),
 +    ],
 +  });
 +}
- function Qjs(e) {
-   let t = (0, eMs.c)(164),
-     {
-@@ -548925,6 +549036,7 @@
-       : ((g = (0, TQ.jsxs)(TQ.Fragment, {
-           children: [
-+            (0, TQ.jsx)(CodexCustomProviderPickerSection, {}),
-             m,
-             (0, TQ.jsx)(`div`, {
-               className: `vertical-scroll-fade-mask flex max-h-[250px] flex-col overflow-y-auto`,
-@@ -549575,6 +549577,8 @@
- }
- var eMs,
-   TQ,
+ function CMs(e) {
+@@ -550363,7 +550541,13 @@
+           triggerButton: N,
+-          children: ye,
++          children: (0, wQ.jsxs)(wQ.Fragment, {
++            children: [
++              (0, wQ.jsx)(CodexCustomProviderPickerSection, {}),
++              ye,
++            ],
++          }),
+         })),
+@@ -550442,6 +550626,8 @@
+ var TMs,
+   wQ,
 +  CodexProviderPatchReact,
-   tMs = e(() => {
-     ((eMs = c()),
+   EMs = e(() => {
+     ((TMs = c()),
 +      (CodexProviderPatchReact = r(o(), 1)),
-       sd(),
+       pd(),
 """
 
 
@@ -516,15 +472,15 @@ def _reorder_embedded_diff_hunks(unified_diff: str, order: tuple[int, ...]) -> s
 
 
 WINDOWS_STORE_3996_CENTRAL_DIFF = _reorder_embedded_diff_hunks(CENTRAL_DIFF.replace(
-    """ function p9t(e) {
-   if (`data` in e) return e;
-   let t = fbe(e);
-   return t == null ? e : { ...e, data: t };
- }""",
+    """ function o9t(e) {
+  if (`data` in e) return e;
+  let t = abe(e);
+  return t == null ? e : { ...e, data: t };
+}""",
     """ function p9t(e, t) {
    return Dx(e) === 2 ? e.has(t) : Object.prototype.hasOwnProperty.call(e, t);
  }""",
-).replace(" var m9t,", " function m9t(e, t) {").replace("await rp(", "await $f("), (1, 2, 0))
+).replace(" var s9t,", " function m9t(e, t) {").replace("await tp(", "await $f("), (1, 2, 0))
 
 WINDOWS_STORE_3996_PICKER_DIFF = r"""@@ -519091,8 +519091,13 @@
   t[43] === r.model

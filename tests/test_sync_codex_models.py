@@ -211,31 +211,34 @@ class PatcherTemplateTests(unittest.TestCase):
             "modelProvider: await codexSelectedProvider()", patcher.CENTRAL_DIFF
         )
 
-    def test_embedded_diffs_target_build_5828_bundle_symbols(self):
-        self.assertIn("function p9t(e)", patcher.CENTRAL_DIFF)
-        self.assertIn("let t = fbe(e);", patcher.CENTRAL_DIFF)
-        self.assertIn("var m9t,", patcher.CENTRAL_DIFF)
-        self.assertIn("function Qjs(e)", patcher.PICKER_DIFF)
+    def test_embedded_diffs_target_build_5848_bundle_symbols(self):
+        self.assertIn("function o9t(e)", patcher.CENTRAL_DIFF)
+        self.assertIn("let t = abe(e);", patcher.CENTRAL_DIFF)
+        self.assertIn("var s9t,", patcher.CENTRAL_DIFF)
+        self.assertIn("function CMs(e)", patcher.PICKER_DIFF)
+        self.assertIn("children: ye,", patcher.PICKER_DIFF)
         for diff in (patcher.CENTRAL_DIFF, patcher.PICKER_DIFF):
-            self.assertIn("rp(`codex-home`", diff)
-            self.assertIn("rp(`read-file`", diff)
-            self.assertNotIn("tp(`codex-home`", diff)
-            self.assertNotIn("tp(`read-file`", diff)
-        self.assertIn("TQ.jsx", patcher.PICKER_DIFF)
-        self.assertIn("KR.Item", patcher.PICKER_DIFF)
-        self.assertIn("Bm : void 0", patcher.PICKER_DIFF)
+            self.assertIn("tp(`codex-home`", diff)
+            self.assertIn("tp(`read-file`", diff)
+            self.assertNotIn("rp(`codex-home`", diff)
+            self.assertNotIn("rp(`read-file`", diff)
+        self.assertIn("wQ.jsx", patcher.PICKER_DIFF)
+        self.assertIn("yz.Item", patcher.PICKER_DIFF)
+        self.assertIn("Ym : void 0", patcher.PICKER_DIFF)
         self.assertIn("(CodexProviderPatchReact = r(o(), 1))", patcher.PICKER_DIFF)
-        for old_symbol in (
-            "function o9t(e)",
-            "let t = obe(e);",
-            "var s9t,",
-            "wQ.jsx",
-            "yz.Item",
-            "Ym : void 0",
-            "fd()",
+        for superseded_symbol in (
+            "function p9t(e)",
+            "let t = fbe(e);",
+            "var m9t,",
+            "function Qjs(e)",
+            "TQ.jsx",
+            "KR.Item",
+            "Bm : void 0",
         ):
-            with self.subTest(old_symbol=old_symbol):
-                self.assertNotIn(old_symbol, patcher.CENTRAL_DIFF + patcher.PICKER_DIFF)
+            with self.subTest(superseded_symbol=superseded_symbol):
+                self.assertNotIn(
+                    superseded_symbol, patcher.CENTRAL_DIFF + patcher.PICKER_DIFF
+                )
 
     def test_patcher_help_describes_explicit_provider_selection(self):
         output = io.StringIO()
@@ -312,62 +315,20 @@ class PatcherTemplateTests(unittest.TestCase):
 
         provider_section = patched.split(
             "function CodexCustomProviderPickerSection()", 1
-        )[1].split("function Qjs(e)", 1)[0]
+        )[1].split("function CMs(e)", 1)[0]
         for component in ("Item", "Title", "Separator"):
-            self.assertIn(f"KR.{component}", provider_section)
-            self.assertNotIn(f"yz.{component}", provider_section)
+            self.assertIn(f"yz.{component}", provider_section)
+            self.assertNotIn(f"KR.{component}", provider_section)
 
-    def test_provider_picker_is_rendered_in_model_choice_menus_only(self):
-        self.assertNotIn("YX.SimpleView", patcher.PICKER_DIFF)
-        self.assertIn(
-            """+        r.model == null
-+          ? null
-+          : (0, $X.jsx)($ss, {
-+              submenu: r.model,
-+              providerPicker: !0,
-+            })""",
-            patcher.PICKER_DIFF,
+    def test_provider_picker_wrapper_hunk_injects_section_before_menu_body(self):
+        hunk = next(
+            hunk
+            for hunk in patcher.parse_hunks(patcher.PICKER_DIFF)
+            if any("children: ye," in line for line in hunk)
         )
-        self.assertIn(
-            """+          children: e.providerPicker
-+            ? (0, $X.jsxs)($X.Fragment, {
-+                children: [
-+                  (0, $X.jsx)(CodexCustomProviderPickerSection, {}),
-+                  l,""",
-            patcher.PICKER_DIFF,
-        )
-        self.assertIn(
-            """           children: [
-+            (0, TQ.jsx)(CodexCustomProviderPickerSection, {}),
-             m,""",
-            patcher.PICKER_DIFF,
-        )
-
-    def test_provider_picker_submenu_hunks_apply_to_the_model_menu(self):
-        model_hunk, submenu_hunk = patcher.parse_hunks(patcher.PICKER_DIFF)[:2]
-        diff = "\n".join(
-            (
-                "@@ -1,1 +1,1 @@",
-                *model_hunk,
-                "@@ -1,1 +1,1 @@",
-                *submenu_hunk,
-                "",
-            )
-        )
-        source = """  t[43] === r.model
-    ? (ie = t[44])
-    : ((ie = r.model == null ? null : (0, $X.jsx)($ss, { submenu: r.model })),
-      (t[43] = r.model),
-      (t[44] = ie));
-function $ss(e) {
-      ? ((u = (0, $X.jsx)(Cos, {
-          ariaLabel: r,
-          contentClassName: i,
-          disabled: a,
-          flyoutHeader: o,
-          label: s,
-          value: c,
-          children: l,
+        diff = "@@ -1,1 +1,1 @@\n" + "\n".join(hunk) + "\n"
+        source = """          triggerButton: N,
+          children: ye,
         })),
 """
 
@@ -379,8 +340,11 @@ function $ss(e) {
 
             patched = bundle.read_text(encoding="utf-8")
 
-        self.assertIn("providerPicker: !0", patched)
-        self.assertIn("children: e.providerPicker", patched)
+        self.assertIn("wQ.Fragment", patched)
+        self.assertIn("CodexCustomProviderPickerSection", patched)
+        self.assertLess(
+            patched.index("CodexCustomProviderPickerSection"), patched.index("ye,"),
+        )
 
     def test_picker_import_hunk_tolerates_added_upstream_initializers(self):
         hunk = next(
@@ -390,29 +354,15 @@ function $ss(e) {
         )
         diff = "@@ -1,1 +1,1 @@\n" + "\n".join(hunk) + "\n"
         source = """}
-var eMs,
-  TQ,
-  tMs = e(() => {
-    ((eMs = c()),
-      sd(),
-      extraInitializer(),
-      $u(),
-      qcs(),
-      nss(),
-      rss(),
-      OAs(),
-      Vm(),
-      qX(),
-      qE(),
-      qR(),
-      Tos(),
-      hcs(),
-      ncs(),
-      Sos(),
-      Pos(),
-      kos(),
-      fcs(),
-      (TQ = J()));
+var TMs,
+  wQ,
+  EMs = e(() => {
+    ((TMs = c()),
+      pd(),
+      ad(),
+      gls(),
+      Tss(),
+      (wQ = J()));
   }),
 """
 
