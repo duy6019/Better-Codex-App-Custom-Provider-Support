@@ -48,6 +48,8 @@ WINDOWS_STORE_ASAR_RELATIVE_PATHS = (
     Path("app") / "resources" / "app.asar",
     Path("resources") / "app.asar",
 )
+SUPPORTED_MACOS_CHATGPT_VERSION = ("26.721.41059", "5848")
+BUILD_5848_BUNDLE_FILENAME = "app-initial-BHB6SClA.js"
 BUILD_5848_BUNDLE_MARKERS = (
     "async prewarmThreadStart(",
     "async sendConfigReadRequest(",
@@ -660,6 +662,7 @@ class BundlePatchVariant:
     picker_diff: str
     picker_insertion_anchor: str = ""
     picker_insertion: str = ""
+    required_filename: str = ""
 
 
 BUNDLE_PATCH_VARIANTS = (
@@ -668,6 +671,7 @@ BUNDLE_PATCH_VARIANTS = (
         BUILD_5848_BUNDLE_MARKERS,
         CENTRAL_DIFF,
         PICKER_DIFF,
+        required_filename=BUILD_5848_BUNDLE_FILENAME,
     ),
     BundlePatchVariant(
         "Windows Store ChatGPT 26.721.3996.0 application",
@@ -686,6 +690,8 @@ BUNDLE_PATCH_VARIANTS = (
         PICKER_COMPONENT_4979,
     ),
 )
+
+MACOS_BUNDLE_PATCH_VARIANTS = (BUNDLE_PATCH_VARIANTS[0],)
 
 
 class PatchError(RuntimeError):
@@ -3651,17 +3657,25 @@ def unique_candidate(
     return matches[0]
 
 
-def _matching_bundle_patch_variants(source: str) -> tuple[BundlePatchVariant, ...]:
+def _matching_bundle_patch_variants(
+    source: str,
+    filename: str,
+    variants: Sequence[BundlePatchVariant] = BUNDLE_PATCH_VARIANTS,
+) -> tuple[BundlePatchVariant, ...]:
     return tuple(
         variant
-        for variant in BUNDLE_PATCH_VARIANTS
-        if all(marker in source for marker in variant.markers)
+        for variant in variants
+        if (not variant.required_filename or variant.required_filename == filename)
+        and all(marker in source for marker in variant.markers)
     )
 
 
-def bundle_patch_variant(bundle: Path) -> BundlePatchVariant:
+def bundle_patch_variant(
+    bundle: Path,
+    variants: Sequence[BundlePatchVariant] = BUNDLE_PATCH_VARIANTS,
+) -> BundlePatchVariant:
     source = bundle.read_text(encoding="utf-8")
-    matches = _matching_bundle_patch_variants(source)
+    matches = _matching_bundle_patch_variants(source, bundle.name, variants)
     if len(matches) != 1:
         raise PatchError(
             f"Expected exactly one supported patch variant for {bundle.name}, "
@@ -3670,7 +3684,10 @@ def bundle_patch_variant(bundle: Path) -> BundlePatchVariant:
     return matches[0]
 
 
-def current_patch_bundle(assets: Path) -> Path:
+def current_patch_bundle(
+    assets: Path,
+    variants: Sequence[BundlePatchVariant] = BUNDLE_PATCH_VARIANTS,
+) -> Path:
     filename_matches = sorted(
         path
         for path in assets.glob("app-initial-*.js")
@@ -3679,7 +3696,7 @@ def current_patch_bundle(assets: Path) -> Path:
     matches = []
     for path in filename_matches:
         source = path.read_text(encoding="utf-8")
-        if len(_matching_bundle_patch_variants(source)) == 1:
+        if len(_matching_bundle_patch_variants(source, path.name, variants)) == 1:
             matches.append(path)
     if len(matches) != 1:
         raise PatchError(
@@ -3778,6 +3795,10 @@ def patch_current_bundle(bundle: Path) -> None:
 
 def validate_original_source(app: Path, original: Path) -> Path:
     app_version, _ = validated_bundle_identity(app, "target app")
+    if app_version != SUPPORTED_MACOS_CHATGPT_VERSION:
+        raise PatchError(
+            "This patch only supports ChatGPT 26.721.41059 build 5848"
+        )
     original_version, _ = validated_bundle_identity(
         original, "clean original backup"
     )
@@ -4002,6 +4023,14 @@ def build_patched_artifacts(
     info_path = original / "Contents" / "Info.plist"
     asar_path = original / "Contents" / "Resources" / "app.asar"
     info, plist_format = load_plist(info_path)
+    version = (
+        str(info.get("CFBundleShortVersionString", "unknown")),
+        str(info.get("CFBundleVersion", "unknown")),
+    )
+    if version != SUPPORTED_MACOS_CHATGPT_VERSION:
+        raise PatchError(
+            "This patch only supports ChatGPT 26.721.41059 build 5848"
+        )
     extracted = work / "app"
     patched_asar = work / "app.asar"
     patched_plist = work / "Info.plist"
@@ -4014,7 +4043,7 @@ def build_patched_artifacts(
     if not assets.is_dir():
         raise PatchError("Extracted app has no webview/assets directory")
 
-    bundle = current_patch_bundle(assets)
+    bundle = current_patch_bundle(assets, MACOS_BUNDLE_PATCH_VARIANTS)
     patch_current_bundle(bundle)
     run(
         ["npx", "--yes", ASAR_PACKAGE, "pack", str(extracted), str(patched_asar)],

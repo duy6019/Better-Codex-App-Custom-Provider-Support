@@ -1180,7 +1180,7 @@ class WindowsRollbackTests(unittest.TestCase):
                 assets = extracted / "webview" / "assets"
                 assets.mkdir(parents=True)
                 (assets / "app-initial-supported.js").write_text(
-                    "\n".join(patcher.BUILD_5848_BUNDLE_MARKERS),
+                    "\n".join(patcher.WINDOWS_STORE_3996_BUNDLE_MARKERS),
                     encoding="utf-8",
                 )
                 return completed(command)

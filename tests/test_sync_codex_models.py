@@ -403,6 +403,23 @@ class CurrentBundleTests(unittest.TestCase):
                 "ChatGPT 26.721.41059 build 5848 application",
             )
 
+    def test_current_patch_bundle_rejects_build_5848_markers_with_other_filename(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            assets = Path(temporary)
+            bundle = self.write_bundle(
+                assets,
+                "app-initial-future-build.js",
+                patcher.BUILD_5848_BUNDLE_MARKERS,
+            )
+
+            with self.assertRaisesRegex(
+                patcher.PatchError,
+                "supported ChatGPT application.*found 0 out of 1 filename matches",
+            ):
+                patcher.current_patch_bundle(assets)
+            with self.assertRaises(patcher.PatchError):
+                patcher.bundle_patch_variant(bundle)
+
     def test_current_patch_bundle_finds_windows_store_3996_app_initial(self):
         with tempfile.TemporaryDirectory() as temporary:
             assets = Path(temporary)
@@ -591,7 +608,7 @@ class CurrentBundleTests(unittest.TestCase):
 
             with self.assertRaisesRegex(
                 patcher.PatchError,
-                "found 2 out of 2 filename matches",
+                "found 0 out of 2 filename matches",
             ):
                 patcher.current_patch_bundle(assets)
 
@@ -615,7 +632,7 @@ class CurrentBundleTests(unittest.TestCase):
             assets = Path(temporary)
             self.write_bundle(
                 assets,
-                "app-initial-mixed.js",
+                patcher.BUILD_5848_BUNDLE_FILENAME,
                 (
                     *patcher.BUILD_5848_BUNDLE_MARKERS,
                     *patcher.WINDOWS_STORE_4979_BUNDLE_MARKERS,
@@ -827,8 +844,8 @@ class SiblingOriginalTests(unittest.TestCase):
                 with (bundle / "Contents" / "Info.plist").open("wb") as handle:
                     plistlib.dump(
                         {
-                            "CFBundleShortVersionString": "26.715.72359",
-                            "CFBundleVersion": "5718",
+                            "CFBundleShortVersionString": "26.721.41059",
+                            "CFBundleVersion": "5848",
                         },
                         handle,
                     )
@@ -1004,8 +1021,8 @@ class SiblingOriginalTests(unittest.TestCase):
                 with (bundle / "Contents" / "Info.plist").open("wb") as handle:
                     plistlib.dump(
                         {
-                            "CFBundleShortVersionString": "26.715.72359",
-                            "CFBundleVersion": "5718",
+                            "CFBundleShortVersionString": "26.721.41059",
+                            "CFBundleVersion": "5848",
                         },
                         handle,
                     )
@@ -1232,6 +1249,8 @@ class PatchTransactionTests(unittest.TestCase):
             with (original / "Contents" / "Info.plist").open("wb") as handle:
                 plistlib.dump(
                     {
+                        "CFBundleShortVersionString": "26.721.41059",
+                        "CFBundleVersion": "5848",
                         "ElectronAsarIntegrity": {
                             "Resources/app.asar": {"hash": "hash"}
                         }
@@ -1401,6 +1420,35 @@ class PatchTransactionTests(unittest.TestCase):
 
 
 class ReapplyTests(unittest.TestCase):
+    def test_reapply_source_rejects_unsupported_macos_build(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = root / "ChatGPT.app"
+            original = root / "ChatGPT-original.backup"
+            for bundle in (app, original):
+                resources = bundle / "Contents" / "Resources"
+                resources.mkdir(parents=True)
+                (resources / "app.asar").write_bytes(b"asar")
+                with (bundle / "Contents" / "Info.plist").open("wb") as handle:
+                    plistlib.dump(
+                        {
+                            "CFBundleShortVersionString": "26.721.41060",
+                            "CFBundleVersion": "5849",
+                        },
+                        handle,
+                    )
+
+            with (
+                mock.patch.object(patcher, "contains_marker", return_value=False),
+                mock.patch.object(patcher, "asar_header_hash", return_value="hash"),
+                mock.patch.object(patcher, "asar_integrity_hash", return_value="hash"),
+            ):
+                with self.assertRaisesRegex(
+                    patcher.PatchError,
+                    "only supports ChatGPT 26.721.41059 build 5848",
+                ):
+                    patcher.validate_original_source(app, original)
+
     def test_reapply_source_accepts_matching_clean_original(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -1413,8 +1461,8 @@ class ReapplyTests(unittest.TestCase):
                 with (bundle / "Contents" / "Info.plist").open("wb") as handle:
                     plistlib.dump(
                         {
-                            "CFBundleShortVersionString": "26.715.31925",
-                            "CFBundleVersion": "5551",
+                            "CFBundleShortVersionString": "26.721.41059",
+                            "CFBundleVersion": "5848",
                         },
                         handle,
                     )
@@ -1433,14 +1481,14 @@ class ReapplyTests(unittest.TestCase):
             root = Path(temporary)
             app = root / "ChatGPT.app"
             original = root / "ChatGPT-original.backup"
-            for bundle, build in ((app, "5551"), (original, "5552")):
+            for bundle, build in ((app, "5848"), (original, "5849")):
                 resources = bundle / "Contents" / "Resources"
                 resources.mkdir(parents=True)
                 (resources / "app.asar").write_bytes(b"asar")
                 with (bundle / "Contents" / "Info.plist").open("wb") as handle:
                     plistlib.dump(
                         {
-                            "CFBundleShortVersionString": "26.715.31925",
+                            "CFBundleShortVersionString": "26.721.41059",
                             "CFBundleVersion": build,
                         },
                         handle,
