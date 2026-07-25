@@ -68,6 +68,17 @@ WINDOWS_STORE_3996_BUNDLE_MARKERS = (
     "function Jss(e)",
     "function Yss(e)",
 )
+WINDOWS_STORE_4979_BUNDLE_MARKERS = (
+    "async prewarmThreadStart(",
+    "async sendConfigReadRequest(",
+    "composer.intelligenceDropdown.tooltip",
+    "data-model-picker-model-row",
+    "vertical-scroll-fade-mask flex max-h-[250px] flex-col overflow-y-auto",
+    "function s9t(e)",
+    "function hcs(e)",
+    "function gcs(e)",
+    "async function tp(...e)",
+)
 
 DEFAULT_PROVIDER_CONFIG: dict[str, Any] = {
     "version": 1,
@@ -632,6 +643,59 @@ function CodexCustomProviderPickerSection() {
 }
 """
 
+WINDOWS_STORE_4979_CENTRAL_DIFF = CENTRAL_DIFF.replace(
+    """ function p9t(e) {
+   if (`data` in e) return e;
+   let t = fbe(e);
+   return t == null ? e : { ...e, data: t };
+ }""",
+    """ function s9t(e) {
+   if (`data` in e) return e;
+   let t = abe(e);
+   return t == null ? e : { ...e, data: t };
+ }""",
+).replace(" var m9t,", " var c9t,").replace("await rp(", "await tp(")
+
+WINDOWS_STORE_4979_POWER_PICKER_DIFF = r"""@@ -519719,8 +519719,13 @@
+  t[43] === r.model
+    ? (ie = t[44])
+-    : ((ie = r.model == null ? null : (0, $X.jsx)(gcs, { submenu: r.model })),
++    : ((ie =
++        r.model == null
++          ? null
++          : (0, $X.jsx)(gcs, {
++              submenu: r.model,
++              providerPicker: !0,
++            })),
+      (t[43] = r.model),
+      (t[44] = ie));
+@@ -519840,7 +519845,14 @@
+          flyoutHeader: o,
+          label: s,
+          value: c,
+-          children: l,
++          children: e.providerPicker
++            ? (0, $X.jsxs)($X.Fragment, {
++                children: [
++                  (0, $X.jsx)(CodexCustomProviderPickerSection, {}),
++                  l,
++                ],
++              })
++            : l,
+        })),
+        (t[4] = n.ariaLabel),
+"""
+WINDOWS_STORE_4979_PICKER_DIFF = "\n".join(
+    f" {line}" if line and not line.startswith(("@@", "+", "-")) else line
+    for line in WINDOWS_STORE_4979_POWER_PICKER_DIFF.splitlines()
+)
+
+PICKER_COMPONENT_4979_ANCHOR = "function hcs(e) {"
+PICKER_COMPONENT_4979 = (
+    PICKER_COMPONENT_3996.replace("UR", "yz")
+    .replace("Fm", "Ym")
+)
+
 @dataclasses.dataclass(frozen=True)
 class BundlePatchVariant:
     name: str
@@ -656,6 +720,14 @@ BUNDLE_PATCH_VARIANTS = (
         WINDOWS_STORE_3996_PICKER_DIFF,
         PICKER_COMPONENT_3996_ANCHOR,
         PICKER_COMPONENT_3996,
+    ),
+    BundlePatchVariant(
+        "Windows Store ChatGPT 26.721.4979.0 application",
+        WINDOWS_STORE_4979_BUNDLE_MARKERS,
+        WINDOWS_STORE_4979_CENTRAL_DIFF,
+        WINDOWS_STORE_4979_PICKER_DIFF,
+        PICKER_COMPONENT_4979_ANCHOR,
+        PICKER_COMPONENT_4979,
     ),
 )
 

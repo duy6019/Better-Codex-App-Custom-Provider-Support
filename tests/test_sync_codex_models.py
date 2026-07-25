@@ -468,6 +468,152 @@ class CurrentBundleTests(unittest.TestCase):
                 "Windows Store ChatGPT 26.721.3996.0 application",
             )
 
+    def test_current_patch_bundle_finds_windows_store_4979_app_initial(self):
+        markers = (
+            "async prewarmThreadStart(",
+            "async sendConfigReadRequest(",
+            "composer.intelligenceDropdown.tooltip",
+            "data-model-picker-model-row",
+            "vertical-scroll-fade-mask flex max-h-[250px] flex-col overflow-y-auto",
+            "function s9t(e)",
+            "function hcs(e)",
+            "function gcs(e)",
+            "async function tp(...e)",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            assets = Path(temporary)
+            expected = self.write_bundle(
+                assets,
+                "app-initial-BbEVL4-_.js",
+                markers,
+            )
+
+            self.assertEqual(patcher.WINDOWS_STORE_4979_BUNDLE_MARKERS, markers)
+            self.assertEqual(patcher.current_patch_bundle(assets), expected)
+            self.assertEqual(
+                patcher.bundle_patch_variant(expected).name,
+                "Windows Store ChatGPT 26.721.4979.0 application",
+            )
+
+    def test_current_patch_bundle_rejects_incomplete_or_ambiguous_4979_markers(self):
+        markers = (
+            "async prewarmThreadStart(",
+            "async sendConfigReadRequest(",
+            "composer.intelligenceDropdown.tooltip",
+            "data-model-picker-model-row",
+            "vertical-scroll-fade-mask flex max-h-[250px] flex-col overflow-y-auto",
+            "function s9t(e)",
+            "function hcs(e)",
+            "function gcs(e)",
+            "async function tp(...e)",
+        )
+        for missing_marker in markers:
+            with self.subTest(missing_marker=missing_marker):
+                with tempfile.TemporaryDirectory() as temporary:
+                    assets = Path(temporary)
+                    self.write_bundle(
+                        assets,
+                        "app-initial-BbEVL4-_.js",
+                        tuple(marker for marker in markers if marker != missing_marker),
+                    )
+
+                    with self.assertRaises(patcher.PatchError):
+                        patcher.current_patch_bundle(assets)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            assets = Path(temporary)
+            self.write_bundle(
+                assets,
+                "app-initial-BbEVL4-_.js",
+                (*markers, *patcher.WINDOWS_STORE_3996_BUNDLE_MARKERS),
+            )
+
+            with self.assertRaises(patcher.PatchError):
+                patcher.current_patch_bundle(assets)
+
+    def test_windows_store_4979_variant_injects_provider_picker_into_power_picker(self):
+        source_parts = (
+            "var vcs,",
+            "  QX,",
+            "  $X,",
+            "  ycs = e(() => {",
+            "    ((vcs = c()),",
+            "      (QX = r(o(), 1)),",
+            "      ($X = J()));",
+            "  });",
+            "function hcs(e) {",
+            "  t[43] === r.model",
+            "    ? (ie = t[44])",
+            "    : ((ie = r.model == null ? null : (0, $X.jsx)(gcs, { submenu: r.model })),",
+            "      (t[43] = r.model),",
+            "      (t[44] = ie));",
+            "function gcs(e) {",
+            "  let t = (0, vcs.c)(12),",
+            "    { submenu: n } = e,",
+            "    r = n.ariaLabel,",
+            "    i = n.contentClassName,",
+            "    a = n.disabled,",
+            "    o;",
+            "  let s = n.label,",
+            "    c = n.value,",
+            "    l;",
+            "  let u;",
+            "  return (",
+            "    t[4] !== n.ariaLabel ||",
+            "    t[5] !== n.contentClassName ||",
+            "    t[6] !== n.disabled ||",
+            "    t[7] !== n.label ||",
+            "    t[8] !== n.value ||",
+            "    t[9] !== o ||",
+            "    t[10] !== l",
+            "      ? ((u = (0, $X.jsx)(Bos, {",
+            "          ariaLabel: r,",
+            "          contentClassName: i,",
+            "          disabled: a,",
+            "          flyoutHeader: o,",
+            "          label: s,",
+            "          value: c,",
+            "          children: l,",
+            "        })),",
+            "        (t[4] = n.ariaLabel),",
+            "        (t[5] = n.contentClassName),",
+            "        (t[6] = n.disabled),",
+            "        (t[7] = n.label),",
+            "        (t[8] = n.value),",
+            "        (t[9] = o),",
+            "        (t[10] = l),",
+            "        (t[11] = u))",
+            "      : (u = t[11]),",
+            "    u",
+            "  );",
+            "}",
+        )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            bundle = Path(temporary) / "app-initial-BbEVL4-_.js"
+            bundle.write_text("\n".join(source_parts) + "\n", encoding="utf-8")
+
+            try:
+                patcher.apply_unified_diff(
+                    bundle, patcher.WINDOWS_STORE_4979_PICKER_DIFF
+                )
+                patcher.insert_unique_before(
+                    bundle,
+                    patcher.PICKER_COMPONENT_4979_ANCHOR,
+                    patcher.PICKER_COMPONENT_4979,
+                )
+                patched = bundle.read_text(encoding="utf-8")
+            except patcher.PatchError:
+                patched = ""
+
+        self.assertIn("providerPicker: !0", patched)
+        self.assertIn("CodexCustomProviderPickerSection", patched)
+        self.assertIn("QX.useState", patched)
+        self.assertIn("(0, $X.jsx)(yz.Title", patched)
+        self.assertIn("await tp(`codex-home`", patcher.WINDOWS_STORE_4979_CENTRAL_DIFF)
+        self.assertIn("await tp(`read-file`", patcher.WINDOWS_STORE_4979_CENTRAL_DIFF)
+        self.assertNotIn("await rp(", patcher.WINDOWS_STORE_4979_CENTRAL_DIFF)
+
     def test_current_patch_bundle_rejects_missing_build_5828_layout(self):
         with tempfile.TemporaryDirectory() as temporary:
             assets = Path(temporary)
