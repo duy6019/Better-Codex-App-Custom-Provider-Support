@@ -11,7 +11,6 @@ import unittest
 from unittest import mock
 
 import patch_chatgpt_providers as patcher
-import sync_codex_models as legacy_sync
 import sync_model_catalog as sync
 
 
@@ -33,9 +32,6 @@ FIXTURE_CATALOG = {
 
 
 class CatalogTests(unittest.TestCase):
-    def test_legacy_sync_module_reexports_catalog_operations(self):
-        self.assertIs(legacy_sync.synchronize, sync.synchronize)
-
     def test_read_bundled_catalog_decodes_cli_output_as_utf8(self):
         catalog = {
             "models": [
@@ -437,13 +433,13 @@ class CurrentBundleTests(unittest.TestCase):
         bundle.write_text("\n".join(markers), encoding="utf-8")
         return bundle
 
-    def test_current_patch_bundle_finds_build_5828_app_initial(self):
+    def test_current_patch_bundle_finds_build_5848_app_initial(self):
         with tempfile.TemporaryDirectory() as temporary:
             assets = Path(temporary)
             expected = self.write_bundle(
                 assets,
-                "app-initial-C-fROkKo.js",
-                patcher.BUILD_5828_BUNDLE_MARKERS,
+                "app-initial-BHB6SClA.js",
+                patcher.BUILD_5848_BUNDLE_MARKERS,
             )
             self.write_bundle(
                 assets,
@@ -452,6 +448,10 @@ class CurrentBundleTests(unittest.TestCase):
             )
 
             self.assertEqual(patcher.current_patch_bundle(assets), expected)
+            self.assertEqual(
+                patcher.bundle_patch_variant(expected).name,
+                "ChatGPT 26.721.41059 build 5848 application",
+            )
 
     def test_current_patch_bundle_finds_windows_store_3996_app_initial(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -614,13 +614,13 @@ class CurrentBundleTests(unittest.TestCase):
         self.assertIn("await tp(`read-file`", patcher.WINDOWS_STORE_4979_CENTRAL_DIFF)
         self.assertNotIn("await rp(", patcher.WINDOWS_STORE_4979_CENTRAL_DIFF)
 
-    def test_current_patch_bundle_rejects_missing_build_5828_layout(self):
+    def test_current_patch_bundle_rejects_missing_build_5848_layout(self):
         with tempfile.TemporaryDirectory() as temporary:
             assets = Path(temporary)
             self.write_bundle(
                 assets,
                 "app-initial-old.js",
-                patcher.BUILD_5828_BUNDLE_MARKERS[:-1],
+                patcher.BUILD_5848_BUNDLE_MARKERS[:-1],
             )
 
             with self.assertRaisesRegex(
@@ -629,14 +629,14 @@ class CurrentBundleTests(unittest.TestCase):
             ):
                 patcher.current_patch_bundle(assets)
 
-    def test_current_patch_bundle_rejects_ambiguous_build_5828_layout(self):
+    def test_current_patch_bundle_rejects_ambiguous_build_5848_layout(self):
         with tempfile.TemporaryDirectory() as temporary:
             assets = Path(temporary)
             for suffix in ("one", "two"):
                 self.write_bundle(
                     assets,
                     f"app-initial-{suffix}.js",
-                    patcher.BUILD_5828_BUNDLE_MARKERS,
+                    patcher.BUILD_5848_BUNDLE_MARKERS,
                 )
 
             with self.assertRaisesRegex(
@@ -651,7 +651,7 @@ class CurrentBundleTests(unittest.TestCase):
             self.write_bundle(
                 assets,
                 "legacy-app-initial-unexpected.js",
-                patcher.BUILD_5828_BUNDLE_MARKERS,
+                patcher.BUILD_5848_BUNDLE_MARKERS,
             )
 
             with self.assertRaisesRegex(
@@ -660,10 +660,25 @@ class CurrentBundleTests(unittest.TestCase):
             ):
                 patcher.current_patch_bundle(assets)
 
-    def test_build_5828_markers_include_verified_minified_symbols(self):
-        self.assertIn("function p9t(e)", patcher.BUILD_5828_BUNDLE_MARKERS)
-        self.assertIn("function Qjs(e)", patcher.BUILD_5828_BUNDLE_MARKERS)
-        self.assertIn("async function rp(...e)", patcher.BUILD_5828_BUNDLE_MARKERS)
+    def test_current_patch_bundle_rejects_mixed_build_5848_and_windows_4979_markers(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            assets = Path(temporary)
+            self.write_bundle(
+                assets,
+                "app-initial-mixed.js",
+                (
+                    *patcher.BUILD_5848_BUNDLE_MARKERS,
+                    *patcher.WINDOWS_STORE_4979_BUNDLE_MARKERS,
+                ),
+            )
+
+            with self.assertRaises(patcher.PatchError):
+                patcher.current_patch_bundle(assets)
+
+    def test_build_5848_markers_include_verified_minified_symbols(self):
+        self.assertIn("function o9t(e)", patcher.BUILD_5848_BUNDLE_MARKERS)
+        self.assertIn("function CMs(e)", patcher.BUILD_5848_BUNDLE_MARKERS)
+        self.assertIn("async function tp(...e)", patcher.BUILD_5848_BUNDLE_MARKERS)
 
     def test_windows_store_3996_markers_include_verified_minified_symbols(self):
         self.assertIn("function p9t(e,t)", patcher.WINDOWS_STORE_3996_BUNDLE_MARKERS)

@@ -48,15 +48,15 @@ WINDOWS_STORE_ASAR_RELATIVE_PATHS = (
     Path("app") / "resources" / "app.asar",
     Path("resources") / "app.asar",
 )
-BUILD_5828_BUNDLE_MARKERS = (
+BUILD_5848_BUNDLE_MARKERS = (
     "async prewarmThreadStart(",
     "async sendConfigReadRequest(",
     "composer.intelligenceDropdown.tooltip",
     "data-model-picker-model-row",
     "vertical-scroll-fade-mask flex max-h-[250px] flex-col overflow-y-auto",
-    "function p9t(e)",
-    "function Qjs(e)",
-    "async function rp(...e)",
+    "function o9t(e)",
+    "function CMs(e)",
+    "async function tp(...e)",
 )
 WINDOWS_STORE_3996_BUNDLE_MARKERS = (
     "async prewarmThreadStart(",
@@ -708,8 +708,8 @@ class BundlePatchVariant:
 
 BUNDLE_PATCH_VARIANTS = (
     BundlePatchVariant(
-        "ChatGPT 26.721.31836 build 5828 application",
-        BUILD_5828_BUNDLE_MARKERS,
+        "ChatGPT 26.721.41059 build 5848 application",
+        BUILD_5848_BUNDLE_MARKERS,
         CENTRAL_DIFF,
         PICKER_DIFF,
     ),
