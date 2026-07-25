@@ -513,7 +513,7 @@ WINDOWS_STORE_3996_CENTRAL_DIFF = _reorder_embedded_diff_hunks(CENTRAL_DIFF.repl
     """ function p9t(e, t) {
    return Dx(e) === 2 ? e.has(t) : Object.prototype.hasOwnProperty.call(e, t);
  }""",
-).replace(" var m9t,", " function m9t(e, t) {").replace("await rp(", "await If("), (1, 2, 0))
+).replace(" var m9t,", " function m9t(e, t) {").replace("await rp(", "await $f("), (1, 2, 0))
 
 WINDOWS_STORE_3996_PICKER_DIFF = r"""@@ -519091,8 +519091,13 @@
   t[43] === r.model

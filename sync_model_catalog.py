@@ -71,6 +71,7 @@ def read_bundled_catalog(
             command,
             check=True,
             text=True,
+            encoding="utf-8",
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )

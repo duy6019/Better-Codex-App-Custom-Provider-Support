@@ -60,25 +60,16 @@ block installation of the locally signed replacement package.
 
 ### macOS
 
-1. Download `patch_chatgpt_providers.py`, `sync_codex_models.py`,
+1. Download `setup.py`, `patch_chatgpt_providers.py`, `sync_model_catalog.py`,
    `setup_custom_provider.py`, and `codex_config.py` from the repository.
-2. Run the patch script:
+2. Open the guided setup menu:
 
 ```bash
-python3 patch_chatgpt_providers.py
+python3 setup.py
 ```
 
-3. Run the model sync script from the same directory:
-
-```bash
-python3 sync_codex_models.py
-```
-
-4. Add 9router or another custom provider when needed:
-
-```bash
-python3 setup_custom_provider.py
-```
+Choose Patch, refresh the model catalog, and add a provider when needed. The
+individual commands are documented below if you want to run a single step.
 
 The installer closes processes belonging to the target app, maintains a verified
 clean original beside it, creates a transactional snapshot before mutation,
@@ -95,14 +86,17 @@ Run `python3 patch_chatgpt_providers.py --help` to see alternate app and config 
    and run:
 
 ```powershell
-py patch_chatgpt_providers.py
+py setup.py
 ```
 
-3. Run the model sync script and, if needed, the provider setup wizard:
+Choose **Patch the desktop app** from the menu. The same elevated session can
+then refresh the catalog or add a provider. To run a specific action without
+the menu:
 
 ```powershell
-py sync_codex_models.py
-py setup_custom_provider.py
+py setup.py patch
+py setup.py catalog
+py setup.py provider
 ```
 
 The patcher first copies and validates the current Store payload as its clean
@@ -120,12 +114,37 @@ identity and its package-family-scoped settings are retained.
 Do not pass `--app` or `--reapply-from` on Windows: those options are for the
 macOS app-bundle flow.
 
-## Sync Codex models
+## Guided setup
+
+`setup.py` is the recommended entry point. Running it without an argument
+opens a numbered menu, so users do not need to remember command names:
+
+```text
+1. Patch the desktop app
+2. Refresh the bundled Codex model catalog
+3. Add or update a custom provider
+4. Run all steps (patch, catalog, provider)
+```
+
+It also accepts one explicit action when automation is useful:
+
+```bash
+python3 setup.py patch
+python3 setup.py catalog
+python3 setup.py provider
+python3 setup.py all
+```
+
+On Windows, substitute `py` for `python3` and use an elevated PowerShell
+session whenever the selected action patches the app. `all` stops immediately
+if any step fails.
+
+## Sync model catalog
 
 Run the sync script after patching, and again whenever the bundled Codex model catalog changes:
 
 ```bash
-python3 sync_codex_models.py
+python3 sync_model_catalog.py
 ```
 
 Each run reads `codex debug models --bundled`, then recreates
@@ -140,7 +159,11 @@ credential setting, project setting, and global `model = ...` choice in
 
 Use `--catalog` and `--config` to target alternate paths, or `--codex-bin`
 when the Codex CLI has a different executable name. Run
-`python3 sync_codex_models.py --help` for details.
+`python3 sync_model_catalog.py --help` for details.
+
+`sync_codex_models.py` remains as a compatibility wrapper for existing
+installations, but new commands and automation should use
+`sync_model_catalog.py`.
 
 Restart ChatGPT/Codex after synchronization so it loads the updated catalog.
 
@@ -151,6 +174,12 @@ Codex configuration files manually:
 
 ```bash
 python3 setup_custom_provider.py
+```
+
+Or start just this wizard from the guided entry point:
+
+```bash
+python3 setup.py provider
 ```
 
 On Windows, run:

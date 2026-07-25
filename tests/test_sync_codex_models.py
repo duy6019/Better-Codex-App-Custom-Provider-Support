@@ -5,12 +5,14 @@ from pathlib import Path
 import plistlib
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
 
 import patch_chatgpt_providers as patcher
-import sync_codex_models as sync
+import sync_codex_models as legacy_sync
+import sync_model_catalog as sync
 
 
 FIXTURE_CATALOG = {
@@ -31,6 +33,33 @@ FIXTURE_CATALOG = {
 
 
 class CatalogTests(unittest.TestCase):
+    def test_legacy_sync_module_reexports_catalog_operations(self):
+        self.assertIs(legacy_sync.synchronize, sync.synchronize)
+
+    def test_read_bundled_catalog_decodes_cli_output_as_utf8(self):
+        catalog = {
+            "models": [
+                {
+                    "slug": "gpt-test",
+                    "display_name": "GPT\u009d Test",
+                }
+            ]
+        }
+        payload = json.dumps(catalog, ensure_ascii=False).encode("utf-8")
+
+        def runner(_command, **kwargs):
+            self.assertEqual(kwargs["encoding"], "utf-8")
+            return subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdout.buffer.write(" + repr(payload) + ")",
+                ],
+                **kwargs,
+            )
+
+        self.assertEqual(sync.read_bundled_catalog("codex", command_runner=runner), catalog)
+
     def test_build_catalog_keeps_only_bundled_models(self):
         catalog = sync.build_catalog(FIXTURE_CATALOG)
 
@@ -495,7 +524,7 @@ class CurrentBundleTests(unittest.TestCase):
         self.assertIn("function Jss(e)", patcher.WINDOWS_STORE_3996_BUNDLE_MARKERS)
         self.assertIn("function Yss(e)", patcher.WINDOWS_STORE_3996_BUNDLE_MARKERS)
 
-    def test_windows_store_3996_diffs_apply_every_hunk_once(self):
+    def test_windows_store_3996_routes_provider_config_reads_through_host_bridge(self):
         diffs = (
             patcher.WINDOWS_STORE_3996_CENTRAL_DIFF,
             patcher.WINDOWS_STORE_3996_PICKER_DIFF,
@@ -525,7 +554,8 @@ class CurrentBundleTests(unittest.TestCase):
 
         self.assertIn(patcher.PATCH_MARKER.decode(), patched)
         self.assertIn("CodexCustomProviderPickerSection", patched)
-        self.assertIn("await If(`codex-home`", patched)
+        self.assertIn("await $f(`codex-home`", patched)
+        self.assertIn("await $f(`read-file`", patched)
         self.assertIn("(0, $X.jsx)(Jss", patched)
         self.assertIn("(0, $X.jsx)(UR.Title", patched)
 
