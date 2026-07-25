@@ -98,8 +98,8 @@ DEFAULT_PROVIDER_CONFIG: dict[str, Any] = {
 
 CENTRAL_DIFF = r"""@@ -137534,6 +137678,131 @@
  function o9t(e) {
-  if (`data` in e) return e;
-  let t = abe(e);
+   if (`data` in e) return e;
+   let t = abe(e);
    return t == null ? e : { ...e, data: t };
  }
 +function codexProviderRoutingFallback() {
@@ -473,10 +473,10 @@ def _reorder_embedded_diff_hunks(unified_diff: str, order: tuple[int, ...]) -> s
 
 WINDOWS_STORE_3996_CENTRAL_DIFF = _reorder_embedded_diff_hunks(CENTRAL_DIFF.replace(
     """ function o9t(e) {
-  if (`data` in e) return e;
-  let t = abe(e);
-  return t == null ? e : { ...e, data: t };
-}""",
+   if (`data` in e) return e;
+   let t = abe(e);
+   return t == null ? e : { ...e, data: t };
+ }""",
     """ function p9t(e, t) {
    return Dx(e) === 2 ? e.has(t) : Object.prototype.hasOwnProperty.call(e, t);
  }""",
@@ -600,9 +600,9 @@ function CodexCustomProviderPickerSection() {
 """
 
 WINDOWS_STORE_4979_CENTRAL_DIFF = CENTRAL_DIFF.replace(
-    """ function p9t(e) {
+    """ function o9t(e) {
    if (`data` in e) return e;
-   let t = fbe(e);
+   let t = abe(e);
    return t == null ? e : { ...e, data: t };
  }""",
     """ function s9t(e) {
@@ -610,7 +610,7 @@ WINDOWS_STORE_4979_CENTRAL_DIFF = CENTRAL_DIFF.replace(
    let t = abe(e);
    return t == null ? e : { ...e, data: t };
  }""",
-).replace(" var m9t,", " var c9t,").replace("await rp(", "await tp(")
+).replace(" var s9t,", " var c9t,")
 
 WINDOWS_STORE_4979_POWER_PICKER_DIFF = r"""@@ -519719,8 +519719,13 @@
   t[43] === r.model

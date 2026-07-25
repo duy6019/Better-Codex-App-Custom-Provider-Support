@@ -670,6 +670,62 @@ class CurrentBundleTests(unittest.TestCase):
         self.assertIn("(0, $X.jsx)(Jss", patched)
         self.assertIn("(0, $X.jsx)(UR.Title", patched)
 
+    def test_build_5848_central_hunk_matches_verified_source_indentation(self):
+        first_hunk = patcher.parse_hunks(patcher.CENTRAL_DIFF)[0]
+        central_hunk = "\n".join(["@@ -1,5 +1,5 @@", *first_hunk])
+
+        with tempfile.TemporaryDirectory() as temporary:
+            bundle = Path(temporary) / "app-initial-BHB6SClA.js"
+            bundle.write_text(
+                "\n".join(
+                    [
+                        "function o9t(e) {",
+                        "  if (`data` in e) return e;",
+                        "  let t = abe(e);",
+                        "  return t == null ? e : { ...e, data: t };",
+                        "}",
+                        "var s9t,",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            patcher.apply_unified_diff(bundle, central_hunk)
+
+            patched = bundle.read_text(encoding="utf-8")
+
+        self.assertIn("function codexProviderRoutingFallback()", patched)
+        self.assertIn(patcher.PATCH_MARKER.decode(), patched)
+
+    def test_windows_store_4979_central_hunk_uses_verified_source_symbols(self):
+        first_hunk = patcher.parse_hunks(patcher.WINDOWS_STORE_4979_CENTRAL_DIFF)[0]
+        central_hunk = "\n".join(["@@ -1,5 +1,5 @@", *first_hunk])
+
+        with tempfile.TemporaryDirectory() as temporary:
+            bundle = Path(temporary) / "app-initial-BbEVL4-_.js"
+            bundle.write_text(
+                "\n".join(
+                    [
+                        "function s9t(e) {",
+                        "  if (`data` in e) return e;",
+                        "  let t = abe(e);",
+                        "  return t == null ? e : { ...e, data: t };",
+                        "}",
+                        "var c9t,",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            patcher.apply_unified_diff(bundle, central_hunk)
+
+            patched = bundle.read_text(encoding="utf-8")
+
+        self.assertIn("function codexProviderRoutingFallback()", patched)
+        self.assertIn("var c9t,", patched)
+
     def test_patch_current_bundle_applies_both_diffs_to_one_file(self):
         with tempfile.TemporaryDirectory() as temporary:
             bundle = Path(temporary) / "app-initial-current.js"
