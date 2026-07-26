@@ -1,0 +1,69 @@
+schema: sdd-tdd
+
+context: |
+  Dự án: công cụ Python vá ứng dụng ChatGPT/Codex desktop để hỗ trợ custom provider.
+
+  Tech stack
+  - Python thuần, không dependency ngoài. Không có pyproject.toml / setup.cfg.
+  - Entry point: setup.py (menu hướng dẫn). Module chính: patch_chatgpt_providers.py,
+    codex_config.py, setup_custom_provider.py, sync_model_catalog.py
+  - Test: thư viện chuẩn `unittest`, KHÔNG phải pytest (pytest chưa cài).
+      Chạy toàn bộ:  python -m unittest discover -s tests
+      Chạy một file: python -m unittest tests.test_setup
+      Chạy một test: python -m unittest tests.test_setup.SetupTests.test_ten_test
+  - Test hiện có dùng dependency injection (input_func, output_func, command_runner)
+    thay vì mock. Giữ đúng phong cách đó khi viết test mới.
+
+  Nguyên tắc bất di bất dịch của dự án
+  Năm nguyên tắc dưới đây chi phối mọi thay đổi. Mỗi delta spec phải nhất quán với
+  chúng. Nếu một thay đổi buộc phải phá vỡ một nguyên tắc, đó là dấu hiệu bắt buộc
+  nâng lên tầng NẶNG và phải nêu rõ trong proposal.
+
+  I. Sao lưu có kiểm chứng trước khi ghi đè
+     Mọi thao tác sửa ChatGPT.app PHẢI tạo bản sao lưu đầy đủ trước khi thay bất kỳ
+     file nào đã cài. Bản sao lưu PHẢI được kiểm chứng là chứa metadata ứng dụng và
+     app.asar. KHÔNG được bắt đầu ghi đè khi việc tạo hoặc kiểm chứng sao lưu thất bại.
+
+  II. Fail closed khi ASAR không tương thích
+     PHẢI kiểm tra toàn vẹn ASAR nguồn và xác định điểm vá tương thích, không mơ hồ,
+     TRƯỚC khi sửa ứng dụng đã cài. ASAR không hỗ trợ, mơ hồ, hỏng, hoặc bị sửa ngoài
+     dự kiến PHẢI gây lỗi rõ ràng và để nguyên ChatGPT.app. Tính tương thích PHẢI được
+     chứng minh bằng kiểm tra, KHÔNG được suy ra từ số phiên bản.
+
+  III. Tự động khôi phục khi cài đặt thất bại
+     Sau khi file ứng dụng đã thay đổi, bất kỳ lỗi nào trong quá trình thay file, cập
+     nhật metadata toàn vẹn, ký, hay kiểm chứng cuối PHẢI tự động khôi phục ứng dụng
+     gốc từ bản sao lưu đã kiểm chứng. Nếu khôi phục cũng không xong, công cụ PHẢI giữ
+     lại bản sao lưu, báo đường dẫn chính xác, và thoát với trạng thái lỗi.
+
+  IV. Giữ nguyên cài đặt và thông tin đăng nhập của người dùng
+     Thao tác cấu hình CHỈ được sửa đúng những trường và bảng mà nó sở hữu tường minh.
+     Cài đặt Codex, cấu hình project, cấu hình provider, và dữ liệu xác thực lồng nhau
+     không liên quan PHẢI được giữ nguyên. Credential KHÔNG được ghi vào JSON định
+     tuyến sinh tự động, cũng không được lộ ra trong output thông thường.
+
+  V. Chọn provider tường minh
+     Mọi root task mới PHẢI dùng provider đang active trong ô chọn provider của New
+     Task. Ở chế độ đã đăng nhập, lựa chọn thiếu/sai/cũ PHẢI quay về provider mặc định.
+     Ở chế độ guest custom-provider, OpenAI PHẢI bị vô hiệu. Việc chọn model KHÔNG được
+     ngầm đổi provider. Task đang có, Side Chat, sub-agent và các nhánh con PHẢI giữ
+     nguyên quan hệ provider và hành vi kế thừa mà Codex đã thiết lập.
+
+  Yêu cầu an toàn vận hành
+  - Ứng dụng ChatGPT đã cài, cấu hình Codex, catalog model, và file định tuyến provider
+    là trạng thái người dùng cần bảo vệ.
+  - Kiểm tra PHẢI hoàn tất trước khi ghi đè có tính phá huỷ.
+  - Ghi vào file cấu hình sinh tự động PHẢI nguyên tử, để một lần ghi bị ngắt không để
+    lại file dở dang.
+  - File định tuyến provider CHỈ chứa định danh và metadata hiển thị; bí mật thuộc về
+    cấu hình xác thực provider sẵn có của Codex.
+
+rules:
+  specs:
+    - Mỗi scenario phải phát biểu được thành một test `unittest` chạy được. Nếu không
+      diễn đạt nổi thành test thì scenario còn mơ hồ — viết lại.
+    - Nêu rõ hành vi khi thất bại, không chỉ đường đi thuận lợi. Dự án này fail closed;
+      spec bỏ qua nhánh lỗi là spec thiếu.
+  proposal:
+    - Ghi rõ thay đổi có chạm vào ChatGPT.app, cấu hình Codex, hay file định tuyến
+      provider không. Nếu có, nêu tên nguyên tắc (I–V) bị ảnh hưởng.
