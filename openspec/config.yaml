@@ -13,6 +13,14 @@ context: |
       Chạy một test: python -m unittest tests.test_setup.SetupTests.test_ten_test
   - Test hiện có dùng dependency injection (input_func, output_func, command_runner)
     thay vì mock. Giữ đúng phong cách đó khi viết test mới.
+  - Đặt tên file test: tests/test_<X>.py phải mang tên module có thật ở gốc repo, hoặc
+    nằm trong allowlist THEME_NAMED_TESTS của tests/test_module_name_integrity.py kèm
+    lý do. Guard đó cũng chặn tham chiếu <name>.py tới file không tồn tại trong tests/,
+    README.md, CLAUDE.md, và chính file này.
+  - tests/characterization/ chứa characterization test (ghim hành vi đã có, phải pass
+    ngay). Test dẫn dắt hành vi mới nằm thẳng trong tests/ và phải fail trước.
+  - Văn xuôi trong code (docstring, comment, thông báo assert) viết bằng tiếng Anh, khớp
+    với code sẵn có. Tiếng Việt dùng cho CLAUDE.md, openspec/, và trao đổi.
 
   Nguyên tắc bất di bất dịch của dự án
   Năm nguyên tắc dưới đây chi phối mọi thay đổi. Mỗi delta spec phải nhất quán với

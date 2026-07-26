@@ -12,17 +12,29 @@ Dùng `unittest` của thư viện chuẩn, **không phải pytest** (pytest ch�
 dùng dependency injection (`input_func`, `output_func`, `command_runner`) thay vì mock —
 giữ đúng phong cách đó.
 
-Trạng thái: **157 test, tất cả pass.**
+Trạng thái: **165 test, tất cả pass.**
 
-Cảnh báo về `__pycache__` cũ: `sync_codex_models.py` đã được đổi tên thành
-`sync_model_catalog.py`, nhưng bytecode cũ có thể còn sót trong `__pycache__/` và làm
-`unittest discover` nạp nhầm phiên bản cũ — biểu hiện là
-`ModuleNotFoundError: No module named 'sync_codex_models'` cùng số test ít hơn 157.
-Nếu gặp, dọn cache rồi chạy lại; đó không phải lỗi source:
+Ghi chú `__pycache__` cũ ở đây từng nói bytecode sót lại làm `unittest discover` nạp
+nhầm phiên bản cũ. Điều đó **không đúng** và ghi chú đã bị gỡ. Từ Python 3.2, bytecode
+mồ côi trong `__pycache__/` không import được khi thiếu file nguồn, và `unittest
+discover` khớp file nguồn `test*.py` chứ không quét `.pyc`. Xoá nguồn mà giữ `.pyc` cho
+kết quả `Ran 0 tests`, không phải "chạy nhầm bản cũ". `.pyc` mồ côi chỉ là rác build.
 
-```bash
-find . -name __pycache__ -type d -exec rm -rf {} + && python -m unittest discover -s tests
-```
+### Lưới an toàn về tên module
+
+`tests/test_module_name_integrity.py` chặn đúng loại tàn dư mà lần đổi tên
+`sync_model_catalog.py` để lại: tên module đã chết nằm trong tài liệu, và tên module đã
+chết nằm ở chính tên file test. Cả hai đều không làm test nào fail nên sống rất lâu.
+
+- Mọi token `<name>.py` trong `tests/`, `README.md`, `CLAUDE.md`, `openspec/config.yaml`
+  phải trỏ tới file có thật. `.superpowers/` và `openspec/changes/` cố ý nằm ngoài phạm
+  vi quét — đó là hồ sơ lịch sử, sửa cho khớp hiện tại là làm sai lệch.
+- Mỗi `tests/test_<X>.py` phải hoặc mang tên module có thật ở gốc repo, hoặc nằm trong
+  allowlist `THEME_NAMED_TESTS` kèm lý do. Allowlist nằm trong source để mỗi ngoại lệ
+  đều hiện ra trong diff.
+
+`tests/characterization/` giữ characterization test — ghim hành vi đã có, **phải pass
+ngay**. Xem mục "Test cũ chưa có lưới an toàn" bên dưới.
 
 ---
 

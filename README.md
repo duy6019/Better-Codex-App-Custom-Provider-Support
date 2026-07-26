@@ -161,10 +161,6 @@ Use `--catalog` and `--config` to target alternate paths, or `--codex-bin`
 when the Codex CLI has a different executable name. Run
 `python3 sync_model_catalog.py --help` for details.
 
-`sync_codex_models.py` remains as a compatibility wrapper for existing
-installations, but new commands and automation should use
-`sync_model_catalog.py`.
-
 Restart ChatGPT/Codex after synchronization so it loads the updated catalog.
 
 ## Add a custom provider
