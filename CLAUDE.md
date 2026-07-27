@@ -40,7 +40,7 @@ ngay**. Xem mục "Test cũ chưa có lưới an toàn" bên dưới.
 
 ## Định tuyến công việc (đọc mỗi phiên)
 
-Repo này dùng schema OpenSpec `sdd-tdd` (hai tầng) ghép với superpowers.
+Repo này dùng schema OpenSpec `spec-tdd` (hai tầng) ghép với superpowers.
 Năm nguyên tắc bất di bất dịch của dự án nằm trong `openspec/config.yaml`.
 
 ### Việc đầu tiên, trước khi gọi bất kỳ skill nào
@@ -81,7 +81,13 @@ và ghi đè ledger của nhau.
 
 ### Chỉ thị thường trực khác
 
-- **Worktree: không dùng, và đừng hỏi.** Làm thẳng trên nhánh hiện tại.
+- **Worktree là tuỳ chọn, mặc định KHÔNG tạo.** Làm thẳng trên nhánh hiện tại. Nếu bạn
+  thấy thay đổi này thật sự cần cách ly, hãy **hỏi tôi trước** và nói rõ vì sao — tôi
+  quyết. Không bao giờ tự tạo worktree rồi mới báo.
+- **Commit là quyền của tôi.** Đừng tự commit. Khi một mẩu việc xong, dừng lại và báo tôi
+  những gì đã thay đổi; tôi sẽ nói khi nào commit và gộp bao nhiêu vào một commit. Điều
+  này ghi đè bước "Commit" mặc định trong plan do `superpowers:writing-plans` sinh ra và
+  bước commit trong prompt của implementer subagent.
 - **Đóng change bằng CLI:** `openspec archive <name>`. Không dùng `/opsx:sync` — đó là
   đường merge do agent tự làm, không có chốt chặn mất scenario.
 - **Archive TRƯỚC khi** gọi `superpowers:finishing-a-development-branch`.

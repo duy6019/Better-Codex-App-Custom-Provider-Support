@@ -1,4 +1,4 @@
-schema: sdd-tdd
+schema: spec-tdd
 
 context: |
   Dự án: công cụ Python vá ứng dụng ChatGPT/Codex desktop để hỗ trợ custom provider.

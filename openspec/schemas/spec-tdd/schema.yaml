@@ -1,4 +1,4 @@
-name: sdd-tdd
+name: spec-tdd
 version: 1
 description: >
   Two-tier spec-driven workflow with superpowers TDD.
